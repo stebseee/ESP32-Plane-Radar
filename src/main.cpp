@@ -9,6 +9,7 @@
 #include "hardware/display.h"
 #include "services/adsb_client.h"
 #include "services/radar_location.h"
+#include "services/route_lookup.h"
 #include "services/wifi_setup.h"
 #include "ui/radar_display.h"
 #include "ui/radar_range.h"
@@ -59,6 +60,11 @@ void adsbFetchTask(void*) {
       services::adsb::fetchUpdate(services::location::lat(),
                                   services::location::lon(),
                                   ui::radar::fetchRadiusKm());
+      // New callsigns get their route on this pass and show it from the next
+      // fetch on; cached ones are filled in by fetchUpdate() directly.
+      if (config::kShowRoutes) {
+        services::route::resolvePending(config::kRouteLookupsPerCycle);
+      }
     }
     vTaskDelay(pdMS_TO_TICKS(config::kAdsbFetchIntervalMs));
   }
@@ -80,6 +86,12 @@ void setup() {
   services::location::init();
   ui::radar::rangeInit();
   services::adsb::init();
+  if (config::kIdleClockEnabled) {
+    // SNTP keeps retrying in the background until Wi-Fi is up, then resyncs
+    // periodically; the clock screen stays hidden until the first sync.
+    configTzTime(config::kClockTimeZone, config::kNtpServer1,
+                 config::kNtpServer2);
+  }
 
   if (wifiSetupConnect()) {
     showRadarIfConnected();

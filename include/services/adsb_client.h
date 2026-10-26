@@ -18,6 +18,8 @@ struct Aircraft {
   char callsign[9];
   char type[5];
   char alt[12];
+  /** "LHR-JFK" origin-destination codes; empty until the route is known. */
+  char route[10];
 };
 
 constexpr size_t kMaxAircraft = 64;

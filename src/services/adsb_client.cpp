@@ -12,6 +12,7 @@
 
 #include "config.h"
 #include "services/http_body_framing.h"
+#include "services/route_lookup.h"
 
 namespace services::adsb {
 
@@ -232,9 +233,14 @@ void formatAltitudeTag(const JsonObject& plane, char* out, size_t out_len) {
 }
 
 void fillTagFields(Aircraft* ac, const JsonObject& plane) {
+  ac->route[0] = '\0';
   copyJsonStringTrimmed(plane, "flight", ac->callsign, sizeof(ac->callsign));
   if (ac->callsign[0] == '\0') {
     copyJsonStringTrimmed(plane, "hex", ac->callsign, sizeof(ac->callsign));
+  } else if (config::kShowRoutes) {
+    // Routes are keyed by flight callsign; hex fallbacks have none.
+    services::route::request(ac->callsign);
+    services::route::lookupCached(ac->callsign, ac->route, sizeof(ac->route));
   }
 
   copyJsonStringTrimmed(plane, "t", ac->type, sizeof(ac->type));

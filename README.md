@@ -82,6 +82,16 @@ Preset and miles/km choice persist across reboot (`planeradar` NVS namespace).
 
 As range decreases (or aircraft approach), targets move inward; beyond-ring dots become full symbols when they cross the outer ring.
 
+### Idle clock
+
+- When no aircraft are inside the ring for `kClockIdleDelayMs` (10 s), the screen shows a digital clock with the date; beyond-ring rim dots still appear
+- Switches straight back to the radar as soon as an aircraft enters the ring
+- Time comes from NTP once Wi-Fi is up; time zone is `kClockTimeZone` (UK by default), 12/24-hour via `kClock24Hour` — both in `config.h`
+
+### Routes
+
+- Tags show origin-destination airport codes (e.g. `LHR-JFK`) under the callsign, looked up per callsign from [adsbdb](https://www.adsbdb.com) and cached; toggle with `kShowRoutes`
+
 ### ADS-B
 
 - Source: `https://opendata.adsb.fi/api/v3/`

@@ -1,5 +1,6 @@
 #pragma once
 
+#include <cstddef>
 #include <cstdint>
 
 #include <driver/gpio.h>
@@ -58,6 +59,28 @@ constexpr unsigned long kRadarRedrawIntervalMs = 250;
 constexpr float kAdsbFetchRadiusScale = 1.0f;
 /** false = hide aircraft with alt_baro "ground"; true = show them too. */
 constexpr bool kAdsbShowGroundAircraft = false;
+
+/** Show origin-destination airport codes (e.g. "LHR-JFK") on aircraft tags,
+ *  looked up per callsign from adsbdb.com and cached. */
+constexpr bool kShowRoutes = true;
+/** Route lookups per ADS-B fetch cycle (each is one HTTPS request). */
+constexpr size_t kRouteLookupsPerCycle = 3;
+/** Wait before retrying a callsign whose lookup hit a network/server error. */
+constexpr unsigned long kRouteRetryAfterErrorMs = 60000;
+
+// --- Idle clock (shown while no aircraft are inside the radar ring) ---
+constexpr bool kIdleClockEnabled = true;
+/** POSIX TZ string; default is UK time (GMT, BST in summer). Examples:
+ *  "CET-1CEST,M3.5.0,M10.5.0/3" (central Europe),
+ *  "EST5EDT,M3.2.0,M11.1.0" (US eastern). */
+constexpr char kClockTimeZone[] = "GMT0BST,M3.5.0/1,M10.5.0";
+constexpr char kNtpServer1[] = "pool.ntp.org";
+constexpr char kNtpServer2[] = "time.google.com";
+/** true = 24-hour clock ("18:05"); false = 12-hour ("6:05"). */
+constexpr bool kClock24Hour = true;
+/** Stay on the radar this long after the last aircraft leaves the ring, so a
+ *  plane hovering at the edge doesn't flip the screen back and forth. */
+constexpr unsigned long kClockIdleDelayMs = 10000;
 
 // --- UI colors (RGB565) — status screens ---
 constexpr uint16_t kColorBlack = 0x0000;

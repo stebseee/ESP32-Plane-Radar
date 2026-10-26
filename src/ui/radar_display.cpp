@@ -6,6 +6,7 @@
 #include <algorithm>
 #include <cmath>
 #include <cstdlib>
+#include <ctime>
 
 #include "config.h"
 #include "hardware/display.h"
@@ -27,6 +28,7 @@ uint16_t kColorAircraft = 0x001F;
 uint16_t kColorTrackVector = 0xFFFF;
 uint16_t kColorTagType = 0x5DFF;
 uint16_t kColorTagAltitude = 0xFFE0;
+uint16_t kColorTagRoute = 0x87F1;
 uint16_t kColorRunway = 0x4D5F;
 uint16_t kColorRunwayLabel = 0x7DFF;
 
@@ -192,6 +194,8 @@ void initPalette() {
       tft.color565(radar::kTagTypeR, radar::kTagTypeG, radar::kTagTypeB);
   radar::kColorTagAltitude =
       tft.color565(radar::kTagAltR, radar::kTagAltG, radar::kTagAltB);
+  radar::kColorTagRoute =
+      tft.color565(radar::kTagRouteR, radar::kTagRouteG, radar::kTagRouteB);
   radar::kColorRunway =
       tft.color565(radar::kRunwayR, radar::kRunwayG, radar::kRunwayB);
   radar::kColorRunwayLabel = tft.color565(radar::kRunwayLabelR, radar::kRunwayLabelG,
@@ -416,6 +420,12 @@ int measureTagBlockWidth(const services::adsb::Aircraft& plane) {
       max_w = w;
     }
   }
+  if (plane.route[0] != '\0') {
+    const int w = s_draw->textWidth(plane.route);
+    if (w > max_w) {
+      max_w = w;
+    }
+  }
   if (plane.type[0] != '\0') {
     const int w = s_draw->textWidth(plane.type);
     if (w > max_w) {
@@ -437,7 +447,9 @@ void drawAircraftTag(int x, int y, const services::adsb::Aircraft& plane) {
 
   const int line_h = s_draw->fontHeight();
   const int block_w = measureTagBlockWidth(plane);
-  const int block_h = line_h * 3;
+  // The route line only takes space once it is known.
+  const bool has_route = plane.route[0] != '\0';
+  const int block_h = line_h * (has_route ? 4 : 3);
   int ly = y - block_h / 2;
 
   const int symbol_half =
@@ -461,6 +473,12 @@ void drawAircraftTag(int x, int y, const services::adsb::Aircraft& plane) {
     s_draw->drawString(plane.callsign, anchor_x, ly);
   }
   ly += line_h;
+
+  if (has_route) {
+    s_draw->setTextColor(radar::kColorTagRoute, radar::kColorBackground);
+    s_draw->drawString(plane.route, anchor_x, ly);
+    ly += line_h;
+  }
 
   if (plane.type[0] != '\0') {
     s_draw->setTextColor(radar::kColorTagType, radar::kColorBackground);
@@ -511,25 +529,34 @@ void sortBeyondDotsFarFirst(BeyondDotDrawItem* items, size_t count) {
   }
 }
 
-void drawAircraft() {
-  initLabelMetrics();
-
-  // Snapshot under the adsb lock (the fetch may run on another thread).
-  static services::adsb::Aircraft planes[services::adsb::kMaxAircraft];
-  unsigned long base_ms = 0;
-  const size_t n = services::adsb::snapshotAircraft(
-      planes, services::adsb::kMaxAircraft, &base_ms);
-
+/** One render pass's aircraft, projected to screen and sorted far-first. */
+struct AircraftFrame {
+  services::adsb::Aircraft planes[services::adsb::kMaxAircraft];
   AircraftDrawItem items[services::adsb::kMaxAircraft];
   BeyondDotDrawItem dots[services::adsb::kMaxAircraft];
   size_t draw_count = 0;
   size_t dot_count = 0;
+};
+
+/** Static: ~5 KB, too big for the loop task's stack. */
+AircraftFrame s_aircraft_frame;
+
+void collectAircraft(AircraftFrame* frame) {
+  initLabelMetrics();
+
+  // Snapshot under the adsb lock (the fetch may run on another thread).
+  unsigned long base_ms = 0;
+  const size_t n = services::adsb::snapshotAircraft(
+      frame->planes, services::adsb::kMaxAircraft, &base_ms);
+
+  frame->draw_count = 0;
+  frame->dot_count = 0;
 
   for (size_t i = 0; i < n; ++i) {
     // Dead-reckoned position for smooth motion between fetches.
     float lat = 0.0f;
     float lon = 0.0f;
-    extrapolatedLatLon(planes[i], base_ms, &lat, &lon);
+    extrapolatedLatLon(frame->planes[i], base_ms, &lat, &lon);
 
     float dx_km = 0.0f;
     float dy_km = 0.0f;
@@ -540,11 +567,11 @@ void drawAircraft() {
       int x = 0;
       int y = 0;
       latLonToScreen(lat, lon, &x, &y);
-      items[draw_count].index = i;
-      items[draw_count].x = x;
-      items[draw_count].y = y;
-      items[draw_count].dist_sq = distSqFromCenter(x, y);
-      ++draw_count;
+      AircraftDrawItem& item = frame->items[frame->draw_count++];
+      item.index = i;
+      item.x = x;
+      item.y = y;
+      item.dist_sq = distSqFromCenter(x, y);
       continue;
     }
 
@@ -553,29 +580,34 @@ void drawAircraft() {
     if (!beyondRingEdgeDotFromLatLon(lat, lon, &dot_x, &dot_y)) {
       continue;
     }
-    dots[dot_count].x = dot_x;
-    dots[dot_count].y = dot_y;
-    dots[dot_count].dist_sq = distSqFromCenter(dot_x, dot_y);
-    ++dot_count;
+    BeyondDotDrawItem& dot = frame->dots[frame->dot_count++];
+    dot.x = dot_x;
+    dot.y = dot_y;
+    dot.dist_sq = distSqFromCenter(dot_x, dot_y);
   }
 
-  sortBeyondDotsFarFirst(dots, dot_count);
-  for (size_t d = 0; d < dot_count; ++d) {
-    drawBeyondRingDot(dots[d].x, dots[d].y);
-  }
+  sortBeyondDotsFarFirst(frame->dots, frame->dot_count);
+  sortDrawItemsFarFirst(frame->items, frame->draw_count);
+}
 
-  sortDrawItemsFarFirst(items, draw_count);
-  for (size_t d = 0; d < draw_count; ++d) {
-    const size_t i = items[d].index;
-    const int x = items[d].x;
-    const int y = items[d].y;
-    drawSpeedVector(x, y, planes[i].nose_deg, planes[i].track_deg,
-                    planes[i].gs_knots, radar::kColorTrackVector);
-    drawHeadingTriangle(x, y, planes[i].nose_deg, radar::kColorAircraft);
+void drawBeyondRingDots(const AircraftFrame& frame) {
+  for (size_t d = 0; d < frame.dot_count; ++d) {
+    drawBeyondRingDot(frame.dots[d].x, frame.dots[d].y);
   }
-  for (size_t d = 0; d < draw_count; ++d) {
-    const size_t i = items[d].index;
-    drawAircraftTag(items[d].x, items[d].y, planes[i]);
+}
+
+void drawAircraftSymbols(const AircraftFrame& frame) {
+  for (size_t d = 0; d < frame.draw_count; ++d) {
+    const services::adsb::Aircraft& plane = frame.planes[frame.items[d].index];
+    const int x = frame.items[d].x;
+    const int y = frame.items[d].y;
+    drawSpeedVector(x, y, plane.nose_deg, plane.track_deg, plane.gs_knots,
+                    radar::kColorTrackVector);
+    drawHeadingTriangle(x, y, plane.nose_deg, radar::kColorAircraft);
+  }
+  for (size_t d = 0; d < frame.draw_count; ++d) {
+    drawAircraftTag(frame.items[d].x, frame.items[d].y,
+                    frame.planes[frame.items[d].index]);
   }
 }
 
@@ -692,6 +724,90 @@ void drawStaticGrid(Gfx& gfx) {
   gfx.setTextDatum(textdatum_t::top_left);
 }
 
+/** millis() when an aircraft was last inside the ring (0 = never). */
+unsigned long s_last_aircraft_in_ring_ms = 0;
+
+/**
+ * Clock instead of the radar while the ring has been empty for
+ * kClockIdleDelayMs, once NTP has set the time. Any aircraft inside the ring
+ * switches straight back to the radar.
+ */
+bool shouldShowClock(const AircraftFrame& frame, struct tm* now) {
+  if (frame.draw_count > 0) {
+    s_last_aircraft_in_ring_ms = millis();
+    return false;
+  }
+  if (!config::kIdleClockEnabled) {
+    return false;
+  }
+  if (s_last_aircraft_in_ring_ms != 0 &&
+      millis() - s_last_aircraft_in_ring_ms < config::kClockIdleDelayMs) {
+    return false;
+  }
+  // Timeout 0: don't block the render loop waiting for the first NTP sync.
+  return getLocalTime(now, 0);
+}
+
+void formatClockTime(const struct tm& now, char* out, size_t out_len) {
+  if (config::kClock24Hour) {
+    snprintf(out, out_len, "%02d:%02d", now.tm_hour, now.tm_min);
+    return;
+  }
+  const int hour12 = now.tm_hour % 12 == 0 ? 12 : now.tm_hour % 12;
+  snprintf(out, out_len, "%d:%02d", hour12, now.tm_min);
+}
+
+template <typename Gfx>
+void drawClockFace(Gfx& gfx, const AircraftFrame& frame, const struct tm& now) {
+  initLabelMetrics();
+  const DrawScope scope(gfx);
+  displayFontEnsureLoaded(gfx);
+  const int cx = radar::kCenterX;
+  const int cy = radar::kCenterY;
+
+  gfx.fillScreen(radar::kColorBackground);
+  drawGridRing(cx, cy, radar::kGridOuterRadius, radar::kColorGrid);
+
+  // Date under the time, in the cardinal-label font.
+  char date[16];
+  strftime(date, sizeof(date), "%a %d %b", &now);
+  applyCardinalStyle();
+  gfx.setTextDatum(textdatum_t::top_center);
+  gfx.setTextColor(radar::kColorGrid, radar::kColorBackground);
+  gfx.drawString(date, cx, cy + 30);
+
+  // Aircraft beyond the ring still show as rim dots, as on the radar.
+  drawBeyondRingDots(frame);
+
+  // Font7 is LovyanGFX's 48 px seven-segment font (digits and ':' only). It
+  // replaces the VLW font on gfx; drawStaticGrid()/this function reload it.
+  char time_text[8];
+  formatClockTime(now, time_text, sizeof(time_text));
+  gfx.setFont(&fonts::Font7);
+  gfx.setTextSize(1);
+  gfx.setTextDatum(textdatum_t::middle_center);
+  gfx.setTextColor(radar::kColorLabel, radar::kColorBackground);
+  gfx.drawString(time_text, cx, cy - 6);
+  gfx.setTextDatum(textdatum_t::top_left);
+}
+
+/** Either the idle clock or the radar grid with aircraft, into gfx. */
+template <typename Gfx>
+void composeFrame(Gfx& gfx) {
+  collectAircraft(&s_aircraft_frame);
+
+  struct tm now = {};
+  if (shouldShowClock(s_aircraft_frame, &now)) {
+    drawClockFace(gfx, s_aircraft_frame, now);
+    return;
+  }
+
+  drawStaticGrid(gfx);  // opens its own DrawScope(gfx)
+  const DrawScope scope(gfx);
+  drawBeyondRingDots(s_aircraft_frame);
+  drawAircraftSymbols(s_aircraft_frame);
+}
+
 bool ensureFrameSprite() {
   if (s_frame_ready) {
     return true;
@@ -709,11 +825,7 @@ bool ensureFrameSprite() {
 // sprite, then blit it to the panel in a single pushSprite. Because the panel
 // is updated in one pass, labels never show an erase/redraw gap — no flicker.
 void renderFrame() {
-  drawStaticGrid(s_frame);  // opens its own DrawScope(s_frame)
-  {
-    const DrawScope scope(s_frame);
-    drawAircraft();
-  }
+  composeFrame(s_frame);
   s_frame.pushSprite(0, 0);
   tft.setTextDatum(textdatum_t::top_left);
 }
@@ -730,9 +842,7 @@ void radarDisplayDraw() {
   }
 
   // Fallback when the sprite can't be allocated: draw straight to the panel.
-  const DrawScope scope(tft);
-  drawStaticGrid(tft);
-  drawAircraft();
+  composeFrame(tft);
   tft.setTextDatum(textdatum_t::top_left);
 }
 
