@@ -82,6 +82,12 @@ Preset and miles/km choice persist across reboot (`planeradar` NVS namespace).
 
 As range decreases (or aircraft approach), targets move inward; beyond-ring dots become full symbols when they cross the outer ring.
 
+### Sweep
+
+- A green beam rotates clockwise once every `kRadarSweepPeriodMs` (4 s) with a fading trail under the rings
+- Aircraft symbols and rim dots light up as the beam passes them, then fade (to `kRadarSweepMinBrightness`) until the next pass; tags fade less (`kRadarSweepTagMinBrightness`)
+- Turn off with `kRadarSweepEnabled` in `config.h`
+
 ### Idle clock
 
 - When no aircraft are inside the ring for `kClockIdleDelayMs` (10 s), the screen shows a digital clock with the date; beyond-ring rim dots still appear

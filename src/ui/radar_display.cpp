@@ -29,6 +29,7 @@ uint16_t kColorTrackVector = 0xFFFF;
 uint16_t kColorTagType = 0x5DFF;
 uint16_t kColorTagAltitude = 0xFFE0;
 uint16_t kColorTagRoute = 0x87F1;
+uint16_t kColorSweep = 0x47ED;
 uint16_t kColorRunway = 0x4D5F;
 uint16_t kColorRunwayLabel = 0x7DFF;
 
@@ -196,6 +197,8 @@ void initPalette() {
       tft.color565(radar::kTagAltR, radar::kTagAltG, radar::kTagAltB);
   radar::kColorTagRoute =
       tft.color565(radar::kTagRouteR, radar::kTagRouteG, radar::kTagRouteB);
+  radar::kColorSweep =
+      tft.color565(radar::kSweepR, radar::kSweepG, radar::kSweepB);
   radar::kColorRunway =
       tft.color565(radar::kRunwayR, radar::kRunwayG, radar::kRunwayB);
   radar::kColorRunwayLabel = tft.color565(radar::kRunwayLabelR, radar::kRunwayLabelG,
@@ -204,6 +207,60 @@ void initPalette() {
 
 constexpr float kKmPerDeg = 111.0f;
 constexpr float kDegToRad = 3.14159265f / 180.0f;
+
+/** Mix two RGB565 colors: t = 0 gives `from`, t = 1 gives `to`. */
+uint16_t blend565(uint16_t from, uint16_t to, float t) {
+  t = std::max(0.0f, std::min(1.0f, t));
+  const auto mix = [t](int a, int b) {
+    return a + static_cast<int>(lroundf(static_cast<float>(b - a) * t));
+  };
+  const int r = mix((from >> 11) & 0x1F, (to >> 11) & 0x1F);
+  const int g = mix((from >> 5) & 0x3F, (to >> 5) & 0x3F);
+  const int b = mix(from & 0x1F, to & 0x1F);
+  return static_cast<uint16_t>((r << 11) | (g << 5) | b);
+}
+
+/** Fade `color` toward the background by `brightness` (1 = full color). */
+uint16_t dimmed(uint16_t color, float brightness) {
+  return blend565(radar::kColorBackground, color, brightness);
+}
+
+/** Beam bearing now: degrees clockwise from north, 0-360. */
+float sweepAngleDeg() {
+  const unsigned long phase = millis() % config::kRadarSweepPeriodMs;
+  return 360.0f * static_cast<float>(phase) /
+         static_cast<float>(config::kRadarSweepPeriodMs);
+}
+
+/** Screen bearing of (x, y) from the center: degrees clockwise from north. */
+float screenBearingDeg(int x, int y) {
+  const float deg = atan2f(static_cast<float>(x - radar::kCenterX),
+                           static_cast<float>(radar::kCenterY - y)) /
+                    kDegToRad;
+  return deg < 0.0f ? deg + 360.0f : deg;
+}
+
+/**
+ * Brightness of a target at `bearing_deg`: 1 right after the beam passes it,
+ * fading linearly to `min_brightness` just before the beam comes round again.
+ */
+float sweepBrightness(float bearing_deg, float sweep_deg, float min_brightness) {
+  if (!config::kRadarSweepEnabled) {
+    return 1.0f;
+  }
+  float since = sweep_deg - bearing_deg;  // degrees since the beam passed
+  if (since < 0.0f) {
+    since += 360.0f;
+  }
+  return 1.0f - (1.0f - min_brightness) * (since / 360.0f);
+}
+
+/** Point at `radius` px along screen bearing `deg` from the center. */
+void pointOnBearing(float deg, int radius, int* x, int* y) {
+  const float rad = deg * kDegToRad;
+  *x = radar::kCenterX + static_cast<int>(lroundf(sinf(rad) * radius));
+  *y = radar::kCenterY - static_cast<int>(lroundf(cosf(rad) * radius));
+}
 
 void offsetKmFromCenter(float lat, float lon, float* dx_km, float* dy_km,
                         float* dist_km) {
@@ -300,9 +357,8 @@ bool beyondRingEdgeDotFromLatLon(float lat, float lon, int* out_x, int* out_y) {
   return true;
 }
 
-void drawBeyondRingDot(int x, int y) {
-  s_draw->fillSmoothCircle(x, y, radar::kBeyondRingDotRadiusPx,
-                           radar::kColorAircraft);
+void drawBeyondRingDot(int x, int y, uint16_t color) {
+  s_draw->fillSmoothCircle(x, y, radar::kBeyondRingDotRadiusPx, color);
 }
 
 void clipPointToOuterRing(int x0, int y0, int* x1, int* y1) {
@@ -441,7 +497,8 @@ int measureTagBlockWidth(const services::adsb::Aircraft& plane) {
   return max_w;
 }
 
-void drawAircraftTag(int x, int y, const services::adsb::Aircraft& plane) {
+void drawAircraftTag(int x, int y, const services::adsb::Aircraft& plane,
+                     float brightness) {
   initTagLabelMetrics();
   applyTagStyle();
 
@@ -469,25 +526,29 @@ void drawAircraftTag(int x, int y, const services::adsb::Aircraft& plane) {
   ly = std::max(1, std::min(ly, radar::kSize - block_h - 1));
 
   if (plane.callsign[0] != '\0') {
-    s_draw->setTextColor(radar::kColorLabel, radar::kColorBackground);
+    s_draw->setTextColor(dimmed(radar::kColorLabel, brightness),
+                         radar::kColorBackground);
     s_draw->drawString(plane.callsign, anchor_x, ly);
   }
   ly += line_h;
 
   if (has_route) {
-    s_draw->setTextColor(radar::kColorTagRoute, radar::kColorBackground);
+    s_draw->setTextColor(dimmed(radar::kColorTagRoute, brightness),
+                         radar::kColorBackground);
     s_draw->drawString(plane.route, anchor_x, ly);
     ly += line_h;
   }
 
   if (plane.type[0] != '\0') {
-    s_draw->setTextColor(radar::kColorTagType, radar::kColorBackground);
+    s_draw->setTextColor(dimmed(radar::kColorTagType, brightness),
+                         radar::kColorBackground);
     s_draw->drawString(plane.type, anchor_x, ly);
   }
   ly += line_h;
 
   if (plane.alt[0] != '\0') {
-    s_draw->setTextColor(radar::kColorTagAltitude, radar::kColorBackground);
+    s_draw->setTextColor(dimmed(radar::kColorTagAltitude, brightness),
+                         radar::kColorBackground);
     s_draw->drawString(plane.alt, anchor_x, ly);
   }
 }
@@ -497,12 +558,15 @@ struct AircraftDrawItem {
   int x = 0;
   int y = 0;
   int dist_sq = 0;
+  /** Screen bearing from the center, for the sweep fade. */
+  float bearing_deg = 0.0f;
 };
 
 struct BeyondDotDrawItem {
   int x = 0;
   int y = 0;
   int dist_sq = 0;
+  float bearing_deg = 0.0f;
 };
 
 void sortDrawItemsFarFirst(AircraftDrawItem* items, size_t count) {
@@ -536,6 +600,8 @@ struct AircraftFrame {
   BeyondDotDrawItem dots[services::adsb::kMaxAircraft];
   size_t draw_count = 0;
   size_t dot_count = 0;
+  /** Beam bearing for this frame (degrees clockwise from north). */
+  float sweep_deg = 0.0f;
 };
 
 /** Static: ~5 KB, too big for the loop task's stack. */
@@ -551,6 +617,7 @@ void collectAircraft(AircraftFrame* frame) {
 
   frame->draw_count = 0;
   frame->dot_count = 0;
+  frame->sweep_deg = sweepAngleDeg();
 
   for (size_t i = 0; i < n; ++i) {
     // Dead-reckoned position for smooth motion between fetches.
@@ -572,6 +639,7 @@ void collectAircraft(AircraftFrame* frame) {
       item.x = x;
       item.y = y;
       item.dist_sq = distSqFromCenter(x, y);
+      item.bearing_deg = screenBearingDeg(x, y);
       continue;
     }
 
@@ -584,15 +652,22 @@ void collectAircraft(AircraftFrame* frame) {
     dot.x = dot_x;
     dot.y = dot_y;
     dot.dist_sq = distSqFromCenter(dot_x, dot_y);
+    dot.bearing_deg = screenBearingDeg(dot_x, dot_y);
   }
 
   sortBeyondDotsFarFirst(frame->dots, frame->dot_count);
   sortDrawItemsFarFirst(frame->items, frame->draw_count);
 }
 
-void drawBeyondRingDots(const AircraftFrame& frame) {
+/** `with_sweep` = fade by the beam; the clock face has no beam, so no fade. */
+void drawBeyondRingDots(const AircraftFrame& frame, bool with_sweep) {
   for (size_t d = 0; d < frame.dot_count; ++d) {
-    drawBeyondRingDot(frame.dots[d].x, frame.dots[d].y);
+    const float brightness =
+        with_sweep ? sweepBrightness(frame.dots[d].bearing_deg, frame.sweep_deg,
+                                     config::kRadarSweepMinBrightness)
+                   : 1.0f;
+    drawBeyondRingDot(frame.dots[d].x, frame.dots[d].y,
+                      dimmed(radar::kColorAircraft, brightness));
   }
 }
 
@@ -601,13 +676,20 @@ void drawAircraftSymbols(const AircraftFrame& frame) {
     const services::adsb::Aircraft& plane = frame.planes[frame.items[d].index];
     const int x = frame.items[d].x;
     const int y = frame.items[d].y;
+    const float brightness =
+        sweepBrightness(frame.items[d].bearing_deg, frame.sweep_deg,
+                        config::kRadarSweepMinBrightness);
     drawSpeedVector(x, y, plane.nose_deg, plane.track_deg, plane.gs_knots,
-                    radar::kColorTrackVector);
-    drawHeadingTriangle(x, y, plane.nose_deg, radar::kColorAircraft);
+                    dimmed(radar::kColorTrackVector, brightness));
+    drawHeadingTriangle(x, y, plane.nose_deg,
+                        dimmed(radar::kColorAircraft, brightness));
   }
   for (size_t d = 0; d < frame.draw_count; ++d) {
+    const float brightness =
+        sweepBrightness(frame.items[d].bearing_deg, frame.sweep_deg,
+                        config::kRadarSweepTagMinBrightness);
     drawAircraftTag(frame.items[d].x, frame.items[d].y,
-                    frame.planes[frame.items[d].index]);
+                    frame.planes[frame.items[d].index], brightness);
   }
 }
 
@@ -704,8 +786,36 @@ void drawScaleLabel(int cx, int cy, int outer_radius) {
                                scaleLabelAnchorX(cx, outer_radius), cy);
 }
 
+/** Fading trail behind the beam: pie slices dimming away from it. */
+void drawSweepTrail(float sweep_deg) {
+  const int r = radar::kGridOuterRadius;
+  const float step = config::kRadarSweepTrailDeg / radar::kSweepTrailSegments;
+  for (int i = 0; i < radar::kSweepTrailSegments; ++i) {
+    const float t = radar::kSweepTrailPeak *
+                    (1.0f - static_cast<float>(i) / radar::kSweepTrailSegments);
+    int x0 = 0;
+    int y0 = 0;
+    int x1 = 0;
+    int y1 = 0;
+    pointOnBearing(sweep_deg - step * i, r, &x0, &y0);
+    pointOnBearing(sweep_deg - step * (i + 1), r, &x1, &y1);
+    s_draw->fillTriangle(radar::kCenterX, radar::kCenterY, x0, y0, x1, y1,
+                         dimmed(radar::kColorSweep, t));
+  }
+}
+
+void drawSweepBeam(float sweep_deg) {
+  int x = 0;
+  int y = 0;
+  pointOnBearing(sweep_deg, radar::kGridOuterRadius, &x, &y);
+  s_draw->drawWideLine(radar::kCenterX, radar::kCenterY, x, y,
+                       radar::kSweepBeamHalfWidth, radar::kColorSweep);
+}
+
+/** Grid, runways and labels; with the sweep on, the trail sits under the
+ *  rings and the beam over them. */
 template <typename Gfx>
-void drawStaticGrid(Gfx& gfx) {
+void drawStaticGrid(Gfx& gfx, float sweep_deg) {
   initLabelMetrics();
   const DrawScope scope(gfx);
   displayFontEnsureLoaded(gfx);
@@ -714,10 +824,16 @@ void drawStaticGrid(Gfx& gfx) {
   const int grid_r = radar::kGridOuterRadius;
 
   gfx.fillScreen(radar::kColorBackground);
+  initPalette();
+  if (config::kRadarSweepEnabled) {
+    drawSweepTrail(sweep_deg);
+  }
   drawRings(cx, cy, grid_r);
   drawCrosshairs(cx, cy, grid_r, radar::kColorGrid);
-  initPalette();
   runway::drawLargeAirportRunways(gfx);
+  if (config::kRadarSweepEnabled) {
+    drawSweepBeam(sweep_deg);
+  }
   drawCenterDot(cx, cy);
   drawCardinalLabels();
   drawScaleLabel(cx, cy, grid_r);
@@ -777,7 +893,7 @@ void drawClockFace(Gfx& gfx, const AircraftFrame& frame, const struct tm& now) {
   gfx.drawString(date, cx, cy + 30);
 
   // Aircraft beyond the ring still show as rim dots, as on the radar.
-  drawBeyondRingDots(frame);
+  drawBeyondRingDots(frame, false);
 
   // Font7 is LovyanGFX's 48 px seven-segment font (digits and ':' only). It
   // replaces the VLW font on gfx; drawStaticGrid()/this function reload it.
@@ -802,9 +918,10 @@ void composeFrame(Gfx& gfx) {
     return;
   }
 
-  drawStaticGrid(gfx);  // opens its own DrawScope(gfx)
+  // opens its own DrawScope(gfx)
+  drawStaticGrid(gfx, s_aircraft_frame.sweep_deg);
   const DrawScope scope(gfx);
-  drawBeyondRingDots(s_aircraft_frame);
+  drawBeyondRingDots(s_aircraft_frame, true);
   drawAircraftSymbols(s_aircraft_frame);
 }
 

@@ -84,6 +84,14 @@ constexpr uint8_t kTagAltB = 255;
 constexpr uint8_t kTagRouteR = 120;
 constexpr uint8_t kTagRouteG = 255;
 constexpr uint8_t kTagRouteB = 140;
+constexpr uint8_t kSweepR = 70;
+constexpr uint8_t kSweepG = 255;
+constexpr uint8_t kSweepB = 110;
+/** Sweep trail brightness right behind the beam (0-1, fades to 0). */
+constexpr float kSweepTrailPeak = 0.55f;
+/** Pie slices used to draw the trail's fade. */
+constexpr int kSweepTrailSegments = 12;
+constexpr float kSweepBeamHalfWidth = 1.0f;
 constexpr uint8_t kRunwayR = 56;
 constexpr uint8_t kRunwayG = 150;
 constexpr uint8_t kRunwayB = 170;
@@ -101,6 +109,7 @@ extern uint16_t kColorTrackVector;
 extern uint16_t kColorTagType;
 extern uint16_t kColorTagAltitude;
 extern uint16_t kColorTagRoute;
+extern uint16_t kColorSweep;
 extern uint16_t kColorRunway;
 extern uint16_t kColorRunwayLabel;
 
