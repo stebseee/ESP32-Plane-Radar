@@ -27,6 +27,8 @@ constexpr unsigned long kWifiReconnectIntervalMs = 15000;
 // --- BOOT button (ESP32-C3 Super Mini, active LOW) ---
 constexpr gpio_num_t kBootPin = GPIO_NUM_9;
 constexpr unsigned long kBootResetHoldMs = 3000UL;
+/** BOOT hold duration to toggle the radar sweep (release before reset hold). */
+constexpr unsigned long kBootSweepToggleMinMs = 800UL;
 /** Ignore BOOT taps shorter than this (debounce). */
 constexpr unsigned long kBootTapMinMs = 40UL;
 
@@ -46,8 +48,8 @@ constexpr bool kDisplayInvert = true;
 constexpr bool kDisplayRgbOrder = true;
 
 // --- Radar center defaults (overridden via WiFi setup portal) ---
-constexpr double kDefaultRadarLat = 52.3676;
-constexpr double kDefaultRadarLon = 4.9041;
+constexpr double kDefaultRadarLat = 50.743308;
+constexpr double kDefaultRadarLon = -1.983437;
 
 /** Poll adsb.fi (API public limit: 1 req/s). */
 constexpr unsigned long kAdsbFetchIntervalMs = 5000;

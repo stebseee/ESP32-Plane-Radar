@@ -1,6 +1,7 @@
 #include "ui/radar_range.h"
 
 #include "ui/radar_theme.h"
+#include "config.h"
 
 #include <Preferences.h>
 #include <cmath>
@@ -15,6 +16,7 @@ constexpr char kPrefsNamespace[] = "planeradar";
 constexpr char kPrefsRangeKey[] = "rangeIdx";
 constexpr char kPrefsMilesKey[] = "useMiles";
 constexpr char kPrefsRunwaysKey[] = "showRwys";
+constexpr char kPrefsSweepKey[] = "radarSweep";
 constexpr uint8_t kDefaultRangeIndex = 1;  // 10 km ring
 constexpr float kKmPerMile = 1.609344f;
 
@@ -22,6 +24,7 @@ Preferences s_prefs;
 uint8_t s_range_index = kDefaultRangeIndex;
 bool s_use_miles = false;
 bool s_show_runways = true;
+bool s_sweep_enabled = config::kRadarSweepEnabled;
 
 void saveRangeIndex() {
   if (!s_prefs.begin(kPrefsNamespace, false)) {
@@ -44,6 +47,14 @@ void saveShowRunways() {
     return;
   }
   s_prefs.putBool(kPrefsRunwaysKey, s_show_runways);
+  s_prefs.end();
+}
+
+void saveSweepEnabled() {
+  if (!s_prefs.begin(kPrefsNamespace, false)) {
+    return;
+  }
+  s_prefs.putBool(kPrefsSweepKey, s_sweep_enabled);
   s_prefs.end();
 }
 
@@ -70,6 +81,8 @@ void rangeInit() {
       (saved < kRangePresetCount) ? saved : kDefaultRangeIndex;
   s_use_miles = s_prefs.getBool(kPrefsMilesKey, false);
   s_show_runways = s_prefs.getBool(kPrefsRunwaysKey, true);
+  s_sweep_enabled =
+      s_prefs.getBool(kPrefsSweepKey, config::kRadarSweepEnabled);
   s_prefs.end();
 }
 
@@ -92,6 +105,14 @@ float fetchRadiusKm() {
 bool useMiles() { return s_use_miles; }
 
 bool showRunways() { return s_show_runways; }
+
+bool sweepEnabled() { return s_sweep_enabled; }
+
+void sweepToggle() {
+  s_sweep_enabled = !s_sweep_enabled;
+  saveSweepEnabled();
+  Serial.printf("Radar sweep: %s\n", s_sweep_enabled ? "on" : "off");
+}
 
 void saveMilesFromPortal(const char* checkbox_value) {
   s_use_miles = portalCheckboxChecked(checkbox_value);

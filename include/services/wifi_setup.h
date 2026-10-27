@@ -14,5 +14,7 @@ bool wifiBootButtonPressed();
 void bootButtonInit();
 /** Latched short tap (survives blocking HTTP/display work). */
 bool bootButtonConsumeTap();
+/** Latched medium hold; toggles the radar sweep when released. */
+bool bootButtonConsumeSweepToggle();
 /** Call each loop iteration; triggers WiFi reset on long hold. */
 void bootButtonPollLongPress();

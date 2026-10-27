@@ -45,6 +45,9 @@ float fetchRadiusKm();
 
 bool useMiles();
 bool showRunways();
+/** Runtime radar sweep setting; defaults to config::kRadarSweepEnabled. */
+bool sweepEnabled();
+void sweepToggle();
 /** WiFi portal checkbox: "T" = miles, otherwise km. */
 void saveMilesFromPortal(const char* checkbox_value);
 void saveRunwaysFromPortal(const char* checkbox_value);

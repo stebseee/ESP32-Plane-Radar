@@ -17,7 +17,8 @@ After Wi‑Fi is saved, the device reconnects automatically; the radar runs in t
 
 | Action | Effect |
 |--------|--------|
-| **Short tap** | Cycle range preset (5 → 10 → 15 → 25 km); saved to flash |
+| **Short tap** (< 0.8 s) | Cycle range preset (5 → 10 → 15 → 25 km); saved to flash |
+| **Hold 0.8–3 s, then release** | Toggle radar sweep animation; saved across reboots |
 | **Hold 3 s** | Clear Wi‑Fi, location, and units; reboot into setup portal |
 
 During setup you can also hold BOOT at power-on to force a credential reset (same as the long press).
@@ -86,7 +87,7 @@ As range decreases (or aircraft approach), targets move inward; beyond-ring dots
 
 - A green beam rotates clockwise once every `kRadarSweepPeriodMs` (4 s) with a fading trail under the rings
 - Aircraft symbols and rim dots light up as the beam passes them, then fade (to `kRadarSweepMinBrightness`) until the next pass; tags fade less (`kRadarSweepTagMinBrightness`)
-- Turn off with `kRadarSweepEnabled` in `config.h`
+- BOOT medium-hold toggles the sweep at runtime; the choice persists across reboots. Its default is `kRadarSweepEnabled` in `config.h`.
 
 ### Idle clock
 

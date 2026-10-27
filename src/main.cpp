@@ -48,6 +48,12 @@ void handleBootButton() {
   if (bootButtonConsumeTap()) {
     onRangeTap();
   }
+  if (bootButtonConsumeSweepToggle()) {
+    ui::radar::sweepToggle();
+    if (g_radar_visible && WiFi.status() == WL_CONNECTED) {
+      ui::radarDisplayDraw();
+    }
+  }
 }
 
 // ADS-B fetch runs on its own task: the HTTPS request blocks for ~1-2 s, and

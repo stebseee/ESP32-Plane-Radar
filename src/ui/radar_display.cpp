@@ -245,7 +245,7 @@ float screenBearingDeg(int x, int y) {
  * fading linearly to `min_brightness` just before the beam comes round again.
  */
 float sweepBrightness(float bearing_deg, float sweep_deg, float min_brightness) {
-  if (!config::kRadarSweepEnabled) {
+  if (!radar::sweepEnabled()) {
     return 1.0f;
   }
   float since = sweep_deg - bearing_deg;  // degrees since the beam passed
@@ -825,13 +825,13 @@ void drawStaticGrid(Gfx& gfx, float sweep_deg) {
 
   gfx.fillScreen(radar::kColorBackground);
   initPalette();
-  if (config::kRadarSweepEnabled) {
+  if (radar::sweepEnabled()) {
     drawSweepTrail(sweep_deg);
   }
   drawRings(cx, cy, grid_r);
   drawCrosshairs(cx, cy, grid_r, radar::kColorGrid);
   runway::drawLargeAirportRunways(gfx);
-  if (config::kRadarSweepEnabled) {
+  if (radar::sweepEnabled()) {
     drawSweepBeam(sweep_deg);
   }
   drawCenterDot(cx, cy);
@@ -873,6 +873,65 @@ void formatClockTime(const struct tm& now, char* out, size_t out_len) {
   snprintf(out, out_len, "%d:%02d", hour12, now.tm_min);
 }
 
+uint16_t clockColor(uint8_t r, uint8_t g, uint8_t b) {
+  if (config::kDisplayRgbOrder) {
+    return tft.color565(b, g, r);
+  }
+  return tft.color565(r, g, b);
+}
+
+template <typename Gfx>
+void drawWatchBezel(Gfx& gfx) {
+  const int cx = radar::kCenterX;
+  const int cy = radar::kCenterY;
+  const uint16_t blue = clockColor(20, 45, 210);
+  const uint16_t cyan = clockColor(35, 175, 235);
+  const uint16_t amber = clockColor(245, 165, 25);
+  const uint16_t red = clockColor(130, 35, 20);
+  const uint16_t muted_green = clockColor(0, 65, 14);
+
+  gfx.drawCircle(cx, cy, 119, muted_green);
+  gfx.drawCircle(cx, cy, 116, muted_green);
+  for (int bearing = 0; bearing < 360; bearing += 6) {
+    int x0 = 0;
+    int y0 = 0;
+    int x1 = 0;
+    int y1 = 0;
+    const int outer = 115;
+    const bool major = bearing % 30 == 0;
+    const int inner = outer - (major ? 12 : 5);
+    pointOnBearing(static_cast<float>(bearing), outer, &x0, &y0);
+    pointOnBearing(static_cast<float>(bearing), inner, &x1, &y1);
+
+    uint16_t color = muted_green;
+    if (bearing >= 315 || bearing < 45) color = bearing < 45 ? blue : red;
+    else if (bearing < 135) color = cyan;
+    else if (bearing < 180) color = cyan;
+    else if (bearing < 225) color = amber;
+    else color = amber;
+    if (major) {
+      color = clockColor(70, 235, 60);
+    }
+    gfx.drawWideLine(x0, y0, x1, y1, major ? 1.8f : 1.0f, color);
+  }
+
+  // A subdued radar instrument beneath the time readout.
+  const uint16_t panel = clockColor(0, 14, 4);
+  const uint16_t grid = clockColor(0, 48, 13);
+  gfx.fillCircle(cx, cy, 86, panel);
+  gfx.drawCircle(cx, cy, 82, grid);
+  gfx.drawCircle(cx, cy, 61, grid);
+  gfx.drawCircle(cx, cy, 39, grid);
+  gfx.drawWideLine(cx - 77, cy, cx + 77, cy, 0.6f, grid);
+  gfx.drawWideLine(cx, cy - 77, cx, cy + 77, 0.6f, grid);
+
+  if (radar::sweepEnabled()) {
+    drawSweepTrail(sweepAngleDeg());
+    drawSweepBeam(sweepAngleDeg());
+  }
+  gfx.fillCircle(cx, cy, 2, clockColor(190, 115, 20));
+}
+
 template <typename Gfx>
 void drawClockFace(Gfx& gfx, const AircraftFrame& frame, const struct tm& now) {
   initLabelMetrics();
@@ -881,18 +940,32 @@ void drawClockFace(Gfx& gfx, const AircraftFrame& frame, const struct tm& now) {
   const int cx = radar::kCenterX;
   const int cy = radar::kCenterY;
 
-  gfx.fillScreen(radar::kColorBackground);
-  drawGridRing(cx, cy, radar::kGridOuterRadius, radar::kColorGrid);
+  const uint16_t background = clockColor(0, 2, 3);
+  const uint16_t panel = clockColor(0, 14, 4);
+  const uint16_t green = clockColor(40, 255, 35);
+  const uint16_t dim_green = clockColor(0, 100, 20);
+  const uint16_t cyan = clockColor(25, 210, 180);
+  gfx.fillScreen(background);
+  drawWatchBezel(gfx);
 
-  // Date under the time, in the cardinal-label font.
+  // The tiny system readouts and broad digital time echo a 1990s spy watch.
+  applyCardinalStyle();
+  gfx.setTextDatum(textdatum_t::top_center);
+  gfx.setTextColor(dim_green, background);
+  gfx.drawString("Q WATCH  //  007", cx, 31);
+  gfx.drawString("MISSION STATUS: STANDBY", cx, 47);
+
+  // Date and contact status sit below the main time.
   char date[16];
   strftime(date, sizeof(date), "%a %d %b", &now);
   applyCardinalStyle();
   gfx.setTextDatum(textdatum_t::top_center);
-  gfx.setTextColor(radar::kColorGrid, radar::kColorBackground);
-  gfx.drawString(date, cx, cy + 30);
+  gfx.setTextColor(cyan, panel);
+  gfx.drawString(date, cx, cy + 28);
+  gfx.setTextColor(dim_green, panel);
+  gfx.drawString("RADAR SYSTEM // ACTIVE", cx, cy + 48);
 
-  // Aircraft beyond the ring still show as rim dots, as on the radar.
+  // Aircraft beyond the range ring remain visible as tiny bezel contacts.
   drawBeyondRingDots(frame, false);
 
   // Font7 is LovyanGFX's 48 px seven-segment font (digits and ':' only). It
@@ -902,8 +975,20 @@ void drawClockFace(Gfx& gfx, const AircraftFrame& frame, const struct tm& now) {
   gfx.setFont(&fonts::Font7);
   gfx.setTextSize(1);
   gfx.setTextDatum(textdatum_t::middle_center);
-  gfx.setTextColor(radar::kColorLabel, radar::kColorBackground);
+  gfx.setTextColor(dim_green, panel);
+  gfx.drawString(time_text, cx + 1, cy - 5);
+  gfx.setTextColor(green, panel);
   gfx.drawString(time_text, cx, cy - 6);
+
+  applyCardinalStyle();
+  gfx.setTextDatum(textdatum_t::top_center);
+  gfx.setTextColor(green, panel);
+  gfx.drawString("INNER RING: CLEAR", cx, cy + 69);
+  for (int i = 0; i < 5; ++i) {
+    const int x = 67 + i * 23;
+    gfx.fillRect(x, 204, 17, 4, dim_green);
+    gfx.fillRect(x, 204, 14, 4, green);
+  }
   gfx.setTextDatum(textdatum_t::top_left);
 }
 
