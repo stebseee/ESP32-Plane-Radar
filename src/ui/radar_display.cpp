@@ -57,38 +57,6 @@ lgfx::LovyanGFX* s_draw = &tft;
 LGFX_Sprite s_frame(&tft);
 bool s_frame_ready = false;
 
-// Retained flap faces avoid redrawing unchanged digits. The main radar
-// framebuffer remains the only full-screen sprite.
-struct ClockFlap {
-  int16_t x;
-  int16_t y;
-  int16_t w;
-  int16_t h;
-  char value[4] = "";
-  LGFX_Sprite face;
-
-  ClockFlap(int16_t x_, int16_t y_, int16_t w_, int16_t h_)
-      : x(x_), y(y_), w(w_), h(h_), face(&tft) {}
-};
-
-ClockFlap s_clock_flaps[] = {
-    {27, 66, 40, 60}, {71, 66, 40, 60}, {129, 66, 40, 60},
-    {173, 66, 40, 60}, {57, 138, 26, 36}, {87, 138, 26, 36},
-    {123, 138, 60, 36},
-};
-constexpr size_t kClockFlapCount = sizeof(s_clock_flaps) / sizeof(s_clock_flaps[0]);
-bool s_clock_flaps_ready = false;
-bool s_clock_face_drawn = false;
-uint16_t s_clock_bg = 0;
-uint16_t s_clock_top = 0;
-uint16_t s_clock_bottom = 0;
-uint16_t s_clock_text = 0;
-uint16_t s_clock_pin = 0;
-uint16_t s_clock_ring = 0;
-uint16_t s_clock_colon = 0;
-
-uint16_t clockColor(uint8_t r, uint8_t g, uint8_t b);
-
 class DrawScope {
  public:
   explicit DrawScope(lgfx::LovyanGFX& gfx) : prev_(s_draw) { s_draw = &gfx; }
@@ -896,170 +864,85 @@ bool shouldShowClock(const AircraftFrame& frame, struct tm* now) {
   return getLocalTime(now, 0);
 }
 
-void formatClockTime(const struct tm& now, char* out, size_t out_len) {
-  if (config::kClock24Hour) {
-    snprintf(out, out_len, "%02d:%02d", now.tm_hour, now.tm_min);
-    return;
-  }
-  const int hour12 = now.tm_hour % 12 == 0 ? 12 : now.tm_hour % 12;
-  snprintf(out, out_len, "%d:%02d", hour12, now.tm_min);
+uint16_t clockRgb(uint8_t r, uint8_t g, uint8_t b) {
+  return config::kDisplayRgbOrder ? tft.color565(b, g, r) : tft.color565(r, g, b);
 }
 
-void initializeClockFlaps() {
-  if (s_clock_flaps_ready) return;
-  s_clock_bg = clockColor(0, 0, 0);
-  s_clock_top = clockColor(40, 40, 43);
-  s_clock_bottom = clockColor(30, 30, 33);
-  s_clock_text = clockColor(242, 236, 222);
-  s_clock_pin = clockColor(95, 95, 100);
-  s_clock_ring = clockColor(28, 28, 30);
-  s_clock_colon = s_clock_text;
+template <typename Gfx>
+void drawFlapTile(Gfx& gfx, int x, int y, int w, int h, const char* value,
+                  bool large) {
+  const int half = h / 2;
+  const uint16_t top = clockRgb(47, 47, 50);
+  const uint16_t bottom = clockRgb(31, 31, 34);
+  const uint16_t text = clockRgb(242, 236, 222);
+  const uint16_t hinge = clockRgb(0, 0, 0);
+  const uint16_t pin = clockRgb(100, 100, 104);
 
-  for (ClockFlap& flap : s_clock_flaps) {
-    flap.face.setColorDepth(lgfx::color_depth_t::rgb565_2Byte);
-    if (!flap.face.createSprite(flap.w, flap.h)) {
-      // Leave the clock usable if a small sprite allocation fails.
-      s_clock_flaps_ready = false;
-      return;
-    }
-    flap.value[0] = '\0';
-  }
-  s_clock_flaps_ready = true;
+  gfx.fillRoundRect(x, y, w, h, large ? 5 : 4, bottom);
+  gfx.fillRoundRect(x, y, w, half, large ? 5 : 4, top);
+  gfx.setTextDatum(textdatum_t::middle_center);
+  gfx.setTextColor(text);
+  displayFontSetBitmap(gfx, large ? &fonts::FreeSansBold24pt7b
+                                  : &fonts::FreeSansBold12pt7b);
+  gfx.drawString(value, x + w / 2, y + half);
+  gfx.fillRect(x, y + half - 1, w, 2, hinge);
+  gfx.fillRect(x, y + half - 3, 2, 6, pin);
+  gfx.fillRect(x + w - 2, y + half - 3, 2, 6, pin);
 }
 
-void drawClockFlapFace(LGFX_Sprite& sprite, const ClockFlap& flap,
-                       const char* text) {
-  const int half = flap.h / 2;
-  sprite.fillSprite(s_clock_bg);
-  sprite.fillRoundRect(0, 0, flap.w, flap.h, 5, s_clock_bottom);
-  sprite.fillRoundRect(0, 0, flap.w, half, 5, s_clock_top);
-  sprite.setTextDatum(textdatum_t::middle_center);
-  sprite.setTextColor(s_clock_text, s_clock_bottom);
-  if (flap.h > 40) {
-    displayFontSetBitmap(sprite, &fonts::FreeSansBold24pt7b);
-  } else {
-    displayFontSetBitmap(sprite, &fonts::FreeSansBold12pt7b);
-  }
-  sprite.drawString(text, flap.w / 2, half);
-  sprite.fillRect(0, half - 1, flap.w, 2, s_clock_bg);
-  sprite.fillRect(0, half - 3, 2, 6, s_clock_pin);
-  sprite.fillRect(flap.w - 2, half - 3, 2, 6, s_clock_pin);
-}
+template <typename Gfx>
+void drawSplitFlapClock(Gfx& gfx, const struct tm& now) {
+  constexpr int cx = radar::kCenterX;
+  const uint16_t bg = clockRgb(0, 0, 0);
+  const uint16_t muted = clockRgb(130, 130, 134);
+  const uint16_t bezel = clockRgb(32, 32, 35);
+  gfx.fillScreen(bg);
+  gfx.drawCircle(cx, radar::kCenterY, 118, bezel);
 
-void updateClockFlap(lgfx::LovyanGFX& target, ClockFlap& flap, const char* value) {
-  if (strcmp(flap.value, value) == 0) return;
-  drawClockFlapFace(flap.face, flap, value);
-  flap.face.pushSprite(&target, flap.x, flap.y);
-  strncpy(flap.value, value, sizeof(flap.value) - 1);
-}
-
-uint16_t clockColor(uint8_t r, uint8_t g, uint8_t b) {
-  if (config::kDisplayRgbOrder) {
-    return tft.color565(b, g, r);
-  }
-  return tft.color565(r, g, b);
-}
-
-void drawSplitFlapClock(lgfx::LovyanGFX& gfx, const struct tm& now) {
-  initializeClockFlaps();
-  if (!s_clock_flaps_ready) {
-    gfx.fillScreen(s_clock_bg);
-    return;
-  }
-
-  const int cx = radar::kCenterX;
-  const int cy = radar::kCenterY;
-  if (!s_clock_face_drawn) {
-    gfx.fillScreen(s_clock_bg);
-    gfx.drawCircle(cx, cy, 118, s_clock_ring);
-    gfx.fillCircle(cx, 86, 3, s_clock_colon);
-    gfx.fillCircle(cx, 106, 3, s_clock_colon);
-    s_clock_face_drawn = true;
-  }
-
-  char hour[3];
-  char minute[3];
+  char hours[3];
+  char minutes[3];
   char day[3];
-  char month[4];
-  snprintf(hour, sizeof(hour), config::kClock24Hour ? "%02d" : "%02d",
-           config::kClock24Hour ? now.tm_hour :
-               (now.tm_hour % 12 == 0 ? 12 : now.tm_hour % 12));
-  snprintf(minute, sizeof(minute), "%02d", now.tm_min);
+  const int hour = config::kClock24Hour
+                       ? now.tm_hour
+                       : (now.tm_hour % 12 == 0 ? 12 : now.tm_hour % 12);
+  snprintf(hours, sizeof(hours), "%02d", hour);
+  snprintf(minutes, sizeof(minutes), "%02d", now.tm_min);
   snprintf(day, sizeof(day), "%02d", now.tm_mday);
+  char hour_tens[] = {hours[0], '\0'};
+  char minute_tens[] = {minutes[0], '\0'};
+  char day_tens[] = {day[0], '\0'};
   static constexpr const char* months[] = {"JAN", "FEB", "MAR", "APR", "MAY", "JUN",
                                            "JUL", "AUG", "SEP", "OCT", "NOV", "DEC"};
-  strncpy(month, months[now.tm_mon >= 0 && now.tm_mon < 12 ? now.tm_mon : 0], sizeof(month));
-  const char* values[kClockFlapCount] = {hour, hour + 1, minute, minute + 1,
-                                         day, day + 1, month};
-  for (size_t i = 0; i < kClockFlapCount; ++i) {
-    updateClockFlap(gfx, s_clock_flaps[i], values[i]);
-  }
+  const char* month = months[now.tm_mon >= 0 && now.tm_mon < 12 ? now.tm_mon : 0];
 
-  // Small mission readout keeps the dial tied to the existing radar theme.
   applyCardinalStyle();
-  gfx.setTextDatum(textdatum_t::top_center);
-  gfx.setTextColor(clockColor(0, 100, 20), s_clock_bg);
-  gfx.drawString("Q WATCH  //  007", cx, 31);
-  gfx.drawString("MISSION STATUS: STANDBY", cx, 47);
-  gfx.setTextColor(clockColor(25, 210, 180), s_clock_bg);
-  gfx.drawString("RADAR SYSTEM // ACTIVE", cx, 188);
+  gfx.setTextDatum(textdatum_t::middle_center);
+  gfx.setTextColor(muted);
+  gfx.drawString(config::kClock24Hour ? "LOCAL TIME  /  24H" : "LOCAL TIME",
+                 cx, 45);
+  gfx.setTextDatum(textdatum_t::top_left);
+
+  drawFlapTile(gfx, 27, 66, 40, 60, hour_tens, true);
+  drawFlapTile(gfx, 71, 66, 40, 60, hours + 1, true);
+  drawFlapTile(gfx, 129, 66, 40, 60, minute_tens, true);
+  drawFlapTile(gfx, 173, 66, 40, 60, minutes + 1, true);
+  gfx.fillCircle(cx, 86, 3, clockRgb(242, 236, 222));
+  gfx.fillCircle(cx, 106, 3, clockRgb(242, 236, 222));
+
+  drawFlapTile(gfx, 57, 138, 26, 36, day_tens, false);
+  drawFlapTile(gfx, 87, 138, 26, 36, day + 1, false);
+  drawFlapTile(gfx, 123, 138, 60, 36, month, false);
+
+  applyCardinalStyle();
+  gfx.setTextDatum(textdatum_t::middle_center);
+  gfx.setTextColor(muted);
+  gfx.drawString("FLIGHT RADAR  /  IDLE", cx, 196);
   gfx.setTextDatum(textdatum_t::top_left);
 }
 
 template <typename Gfx>
-void drawWatchBezel(Gfx& gfx) {
-  const int cx = radar::kCenterX;
-  const int cy = radar::kCenterY;
-  const uint16_t blue = clockColor(20, 45, 210);
-  const uint16_t cyan = clockColor(35, 175, 235);
-  const uint16_t amber = clockColor(245, 165, 25);
-  const uint16_t red = clockColor(130, 35, 20);
-  const uint16_t muted_green = clockColor(0, 65, 14);
-
-  gfx.drawCircle(cx, cy, 119, muted_green);
-  gfx.drawCircle(cx, cy, 116, muted_green);
-  for (int bearing = 0; bearing < 360; bearing += 6) {
-    int x0 = 0;
-    int y0 = 0;
-    int x1 = 0;
-    int y1 = 0;
-    const int outer = 115;
-    const bool major = bearing % 30 == 0;
-    const int inner = outer - (major ? 12 : 5);
-    pointOnBearing(static_cast<float>(bearing), outer, &x0, &y0);
-    pointOnBearing(static_cast<float>(bearing), inner, &x1, &y1);
-
-    uint16_t color = muted_green;
-    if (bearing >= 315 || bearing < 45) color = bearing < 45 ? blue : red;
-    else if (bearing < 135) color = cyan;
-    else if (bearing < 180) color = cyan;
-    else if (bearing < 225) color = amber;
-    else color = amber;
-    if (major) {
-      color = clockColor(70, 235, 60);
-    }
-    gfx.drawWideLine(x0, y0, x1, y1, major ? 1.8f : 1.0f, color);
-  }
-
-  // A subdued radar instrument beneath the time readout.
-  const uint16_t panel = clockColor(0, 14, 4);
-  const uint16_t grid = clockColor(0, 48, 13);
-  gfx.fillCircle(cx, cy, 86, panel);
-  gfx.drawCircle(cx, cy, 82, grid);
-  gfx.drawCircle(cx, cy, 61, grid);
-  gfx.drawCircle(cx, cy, 39, grid);
-  gfx.drawWideLine(cx - 77, cy, cx + 77, cy, 0.6f, grid);
-  gfx.drawWideLine(cx, cy - 77, cx, cy + 77, 0.6f, grid);
-
-  if (radar::sweepEnabled()) {
-    drawSweepTrail(sweepAngleDeg());
-    drawSweepBeam(sweepAngleDeg());
-  }
-  gfx.fillCircle(cx, cy, 2, clockColor(190, 115, 20));
-}
-
-template <typename Gfx>
 void drawClockFace(Gfx& gfx, const AircraftFrame& frame, const struct tm& now) {
+  initLabelMetrics();
   const DrawScope scope(gfx);
   displayFontEnsureLoaded(gfx);
   drawSplitFlapClock(gfx, now);
@@ -1079,10 +962,6 @@ void composeFrame(Gfx& gfx) {
 
   // opens its own DrawScope(gfx)
   drawStaticGrid(gfx, s_aircraft_frame.sweep_deg);
-  if (s_clock_face_drawn) {
-    s_clock_face_drawn = false;
-    for (ClockFlap& flap : s_clock_flaps) flap.value[0] = '\0';
-  }
   const DrawScope scope(gfx);
   drawBeyondRingDots(s_aircraft_frame, true);
   drawAircraftSymbols(s_aircraft_frame);
