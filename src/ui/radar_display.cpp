@@ -84,6 +84,7 @@ ClockFlap s_clock_flaps[] = {
 constexpr size_t kClockFlapCount = sizeof(s_clock_flaps) / sizeof(s_clock_flaps[0]);
 bool s_clock_flaps_ready = false;
 bool s_clock_faces_initialized = false;
+bool s_clock_face_active = false;
 
 class DrawScope {
  public:
@@ -990,8 +991,9 @@ void composeClockFlapFrame(ClockFlap& flap, float progress) {
 }
 
 void updateClockFlaps(lgfx::LovyanGFX& target,
-                      const char* const values[kClockFlapCount]) {
-  if (!s_clock_faces_initialized) {
+                      const char* const values[kClockFlapCount],
+                      bool redraw_all) {
+  if (!s_clock_faces_initialized || redraw_all) {
     for (size_t i = 0; i < kClockFlapCount; ++i) {
       ClockFlap& flap = s_clock_flaps[i];
       drawClockFlapFace(flap.face, flap, values[i]);
@@ -1015,30 +1017,12 @@ void updateClockFlaps(lgfx::LovyanGFX& target,
   if (changed_count > 0) {
     constexpr int kFlipFrames = 8;
     constexpr int kFrameDelayMs = 8;
-    if (&target != static_cast<lgfx::LovyanGFX*>(&tft)) s_frame.pushSprite(0, 0);
     for (int frame = 1; frame <= kFlipFrames; ++frame) {
       const float progress = static_cast<float>(frame) / kFlipFrames;
-      for (size_t i = 0; i < kClockFlapCount; ++i) {
-        ClockFlap& flap = s_clock_flaps[i];
-        bool is_flipping = false;
-        for (size_t n = 0; n < changed_count; ++n) {
-          if (changed[n] == i) {
-            is_flipping = true;
-            break;
-          }
-        }
-        if (is_flipping) {
-          composeClockFlapFrame(flap, progress);
-          flap.frame.pushSprite(&target, flap.x, flap.y);
-        } else {
-          flap.face.pushSprite(&target, flap.x, flap.y);
-        }
-      }
-      if (&target != static_cast<lgfx::LovyanGFX*>(&tft)) {
-        for (size_t n = 0; n < changed_count; ++n) {
-          ClockFlap& flap = s_clock_flaps[changed[n]];
-          flap.frame.pushSprite(flap.x, flap.y);
-        }
+      for (size_t n = 0; n < changed_count; ++n) {
+        ClockFlap& flap = s_clock_flaps[changed[n]];
+        composeClockFlapFrame(flap, progress);
+        flap.frame.pushSprite(&target, flap.x, flap.y);
       }
       delay(kFrameDelayMs);
     }
@@ -1050,19 +1034,17 @@ void updateClockFlaps(lgfx::LovyanGFX& target,
     }
   }
 
-  for (ClockFlap& flap : s_clock_flaps) {
-    flap.face.pushSprite(&target, flap.x, flap.y);
-  }
 }
 
-template <typename Gfx>
-void drawSplitFlapClock(Gfx& gfx, const struct tm& now) {
+void drawSplitFlapClock(lgfx::LovyanGFX& gfx, const struct tm& now) {
   constexpr int cx = radar::kCenterX;
   const uint16_t bg = clockRgb(0, 0, 0);
-  const uint16_t muted = clockRgb(130, 130, 134);
   const uint16_t bezel = clockRgb(32, 32, 35);
-  gfx.fillScreen(bg);
-  gfx.drawCircle(cx, radar::kCenterY, 118, bezel);
+  const bool entering_clock = !s_clock_face_active;
+  if (entering_clock) {
+    gfx.fillScreen(bg);
+    gfx.drawCircle(cx, radar::kCenterY, 118, bezel);
+  }
 
   char hours[3];
   char minutes[3];
@@ -1083,57 +1065,44 @@ void drawSplitFlapClock(Gfx& gfx, const struct tm& now) {
                                            "JUL", "AUG", "SEP", "OCT", "NOV", "DEC"};
   const char* month = months[now.tm_mon >= 0 && now.tm_mon < 12 ? now.tm_mon : 0];
 
-  applyCardinalStyle();
-  gfx.setTextDatum(textdatum_t::middle_center);
-  gfx.setTextColor(muted);
-  gfx.drawString(config::kClock24Hour ? "LOCAL TIME  /  24H" : "LOCAL TIME",
-                 cx, 45);
-  gfx.setTextDatum(textdatum_t::top_left);
-
   const char* values[kClockFlapCount] = {
       hour_tens, hours + 1, minute_tens, minutes + 1,
       second_tens, seconds + 1, day_tens, day + 1, month,
   };
   if (initializeClockFlaps()) {
-    updateClockFlaps(gfx, values);
+    updateClockFlaps(gfx, values, entering_clock);
   }
-  gfx.fillCircle(84, 91, 3, clockRgb(242, 236, 222));
-  gfx.fillCircle(84, 109, 3, clockRgb(242, 236, 222));
-  gfx.fillCircle(157, 91, 3, clockRgb(242, 236, 222));
-  gfx.fillCircle(157, 109, 3, clockRgb(242, 236, 222));
-
-  applyCardinalStyle();
-  gfx.setTextDatum(textdatum_t::middle_center);
-  gfx.setTextColor(muted);
-  gfx.drawString("FLIGHT RADAR  /  IDLE", cx, 196);
-  gfx.setTextDatum(textdatum_t::top_left);
+  if (entering_clock) {
+    gfx.fillCircle(84, 91, 3, clockRgb(242, 236, 222));
+    gfx.fillCircle(84, 109, 3, clockRgb(242, 236, 222));
+    gfx.fillCircle(157, 91, 3, clockRgb(242, 236, 222));
+    gfx.fillCircle(157, 109, 3, clockRgb(242, 236, 222));
+  }
+  s_clock_face_active = true;
 }
 
-template <typename Gfx>
-void drawClockFace(Gfx& gfx, const AircraftFrame& frame, const struct tm& now) {
-  initLabelMetrics();
-  const DrawScope scope(gfx);
-  displayFontEnsureLoaded(gfx);
-  drawSplitFlapClock(gfx, now);
-  drawBeyondRingDots(frame, false);
+void drawClockFace(const struct tm& now) {
+  drawSplitFlapClock(tft, now);
 }
 
 /** Either the idle clock or the radar grid with aircraft, into gfx. */
 template <typename Gfx>
-void composeFrame(Gfx& gfx) {
+bool composeFrame(Gfx& gfx) {
   collectAircraft(&s_aircraft_frame);
 
   struct tm now = {};
   if (shouldShowClock(s_aircraft_frame, &now)) {
-    drawClockFace(gfx, s_aircraft_frame, now);
-    return;
+    drawClockFace(now);
+    return true;
   }
 
+  s_clock_face_active = false;
   // opens its own DrawScope(gfx)
   drawStaticGrid(gfx, s_aircraft_frame.sweep_deg);
   const DrawScope scope(gfx);
   drawBeyondRingDots(s_aircraft_frame, true);
   drawAircraftSymbols(s_aircraft_frame);
+  return false;
 }
 
 bool ensureFrameSprite() {
@@ -1153,7 +1122,7 @@ bool ensureFrameSprite() {
 // sprite, then blit it to the panel in a single pushSprite. Because the panel
 // is updated in one pass, labels never show an erase/redraw gap — no flicker.
 void renderFrame() {
-  composeFrame(s_frame);
+  if (composeFrame(s_frame)) return;
   s_frame.pushSprite(0, 0);
   tft.setTextDatum(textdatum_t::top_left);
 }
