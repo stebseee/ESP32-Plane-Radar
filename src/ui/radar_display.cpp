@@ -946,7 +946,7 @@ void drawClockFlapFace(LGFX_Sprite& sprite, const ClockFlap& flap,
   sprite.fillRect(flap.w - 2, half - 3, 2, 6, s_clock_pin);
 }
 
-void updateClockFlap(lgfx::LGFXBase& target, ClockFlap& flap, const char* value) {
+void updateClockFlap(lgfx::LovyanGFX& target, ClockFlap& flap, const char* value) {
   if (strcmp(flap.value, value) == 0) return;
   drawClockFlapFace(flap.face, flap, value);
   flap.face.pushSprite(&target, flap.x, flap.y);
@@ -960,7 +960,7 @@ uint16_t clockColor(uint8_t r, uint8_t g, uint8_t b) {
   return tft.color565(r, g, b);
 }
 
-void drawSplitFlapClock(lgfx::LGFXBase& gfx, const struct tm& now) {
+void drawSplitFlapClock(lgfx::LovyanGFX& gfx, const struct tm& now) {
   initializeClockFlaps();
   if (!s_clock_flaps_ready) {
     gfx.fillScreen(s_clock_bg);
