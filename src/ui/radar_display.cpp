@@ -6,6 +6,7 @@
 #include <algorithm>
 #include <cmath>
 #include <cstdlib>
+#include <cstring>
 #include <ctime>
 
 #include "config.h"
@@ -56,6 +57,33 @@ int s_scale_label_h = 0;
 lgfx::LovyanGFX* s_draw = &tft;
 LGFX_Sprite s_frame(&tft);
 bool s_frame_ready = false;
+
+struct ClockFlap {
+  int16_t x;
+  int16_t y;
+  int16_t w;
+  int16_t h;
+  bool large;
+  char value[4] = "";
+  LGFX_Sprite face;
+  LGFX_Sprite next;
+  LGFX_Sprite frame;
+
+  ClockFlap(int16_t x_, int16_t y_, int16_t w_, int16_t h_, bool large_)
+      : x(x_), y(y_), w(w_), h(h_), large(large_), face(&tft), next(&tft),
+        frame(&tft) {}
+};
+
+ClockFlap s_clock_flaps[] = {
+    {18, 74, 26, 52, true}, {47, 74, 26, 52, true},
+    {91, 74, 26, 52, true}, {120, 74, 26, 52, true},
+    {164, 74, 26, 52, true}, {193, 74, 26, 52, true},
+    {57, 143, 26, 36, false}, {87, 143, 26, 36, false},
+    {123, 143, 60, 36, false},
+};
+constexpr size_t kClockFlapCount = sizeof(s_clock_flaps) / sizeof(s_clock_flaps[0]);
+bool s_clock_flaps_ready = false;
+bool s_clock_faces_initialized = false;
 
 class DrawScope {
  public:
@@ -868,26 +896,163 @@ uint16_t clockRgb(uint8_t r, uint8_t g, uint8_t b) {
   return config::kDisplayRgbOrder ? tft.color565(b, g, r) : tft.color565(r, g, b);
 }
 
-template <typename Gfx>
-void drawFlapTile(Gfx& gfx, int x, int y, int w, int h, const char* value,
-                  bool large) {
-  const int half = h / 2;
+bool initializeClockFlaps() {
+  if (s_clock_flaps_ready) return true;
+  for (ClockFlap& flap : s_clock_flaps) {
+    LGFX_Sprite* sprites[] = {&flap.face, &flap.next, &flap.frame};
+    for (LGFX_Sprite* sprite : sprites) {
+      sprite->setColorDepth(lgfx::color_depth_t::rgb332_1Byte);
+      if (!sprite->createSprite(flap.w, flap.h)) {
+        for (ClockFlap& allocated : s_clock_flaps) {
+          allocated.face.deleteSprite();
+          allocated.next.deleteSprite();
+          allocated.frame.deleteSprite();
+        }
+        return false;
+      }
+    }
+  }
+  s_clock_flaps_ready = true;
+  return true;
+}
+
+void drawClockFlapFace(LGFX_Sprite& gfx, const ClockFlap& flap,
+                       const char* value) {
+  const int half = flap.h / 2;
+  const uint16_t bg = clockRgb(0, 0, 0);
   const uint16_t top = clockRgb(47, 47, 50);
   const uint16_t bottom = clockRgb(31, 31, 34);
   const uint16_t text = clockRgb(242, 236, 222);
-  const uint16_t hinge = clockRgb(0, 0, 0);
   const uint16_t pin = clockRgb(100, 100, 104);
+  const int radius = flap.large ? 5 : 4;
 
-  gfx.fillRoundRect(x, y, w, h, large ? 5 : 4, bottom);
-  gfx.fillRoundRect(x, y, w, half, large ? 5 : 4, top);
+  gfx.fillSprite(bg);
+  gfx.fillRoundRect(0, 0, flap.w, flap.h, radius, bottom);
+  gfx.fillRoundRect(0, 0, flap.w, half, radius, top);
   gfx.setTextDatum(textdatum_t::middle_center);
   gfx.setTextColor(text);
-  displayFontSetBitmap(gfx, large ? &fonts::FreeSansBold24pt7b
-                                  : &fonts::FreeSansBold12pt7b);
-  gfx.drawString(value, x + w / 2, y + half);
-  gfx.fillRect(x, y + half - 1, w, 2, hinge);
-  gfx.fillRect(x, y + half - 3, 2, 6, pin);
-  gfx.fillRect(x + w - 2, y + half - 3, 2, 6, pin);
+  displayFontSetBitmap(gfx, flap.large ? &fonts::FreeSansBold18pt7b
+                                      : &fonts::FreeSansBold12pt7b);
+  gfx.drawString(value, flap.w / 2, half);
+  gfx.fillRect(0, half - 1, flap.w, 2, bg);
+  gfx.fillRect(0, half - 3, 2, 6, pin);
+  gfx.fillRect(flap.w - 2, half - 3, 2, 6, pin);
+}
+
+uint8_t darkenClockPixel(uint8_t pixel) {
+  const uint8_t r = (pixel >> 5) & 0x07;
+  const uint8_t g = (pixel >> 2) & 0x07;
+  const uint8_t b = pixel & 0x03;
+  return static_cast<uint8_t>(((r >> 1) << 5) | ((g >> 1) << 2) | (b >> 1));
+}
+
+void copyClockRow(uint8_t* dst, const uint8_t* src, int width, bool darken) {
+  if (!darken) {
+    memcpy(dst, src, static_cast<size_t>(width));
+    return;
+  }
+  for (int x = 0; x < width; ++x) dst[x] = darkenClockPixel(src[x]);
+}
+
+void composeClockFlapFrame(ClockFlap& flap, float progress) {
+  const int width = flap.w;
+  const int height = flap.h;
+  const int half = height / 2;
+  const int bottom_half = height - half;
+  const auto* old_face = static_cast<const uint8_t*>(flap.face.getBuffer());
+  const auto* next_face = static_cast<const uint8_t*>(flap.next.getBuffer());
+  auto* output = static_cast<uint8_t*>(flap.frame.getBuffer());
+
+  memcpy(output, next_face, static_cast<size_t>(half * width));
+  memcpy(output + half * width, old_face + half * width,
+         static_cast<size_t>(bottom_half * width));
+
+  constexpr float kHalfPi = 1.57079632679f;
+  if (progress < 0.5f) {
+    const float fold = progress * 2.0f;
+    const int visible = static_cast<int>(std::lround(half * std::cos(fold * kHalfPi)));
+    const bool dark = fold > 0.45f;
+    for (int row = 0; row < visible; ++row) {
+      const int source_row = (row * half) / visible;
+      copyClockRow(output + (half - visible + row) * width,
+                   old_face + source_row * width, width, dark);
+    }
+  } else {
+    const float unfold = (progress - 0.5f) * 2.0f;
+    const int visible = static_cast<int>(std::lround(bottom_half * std::sin(unfold * kHalfPi)));
+    const bool dark = unfold < 0.55f;
+    for (int row = 0; row < visible; ++row) {
+      const int source_row = half + (row * bottom_half) / visible;
+      copyClockRow(output + (half + row) * width,
+                   next_face + source_row * width, width, dark);
+    }
+  }
+}
+
+void updateClockFlaps(lgfx::LovyanGFX& target,
+                      const char* const values[kClockFlapCount]) {
+  if (!s_clock_faces_initialized) {
+    for (size_t i = 0; i < kClockFlapCount; ++i) {
+      ClockFlap& flap = s_clock_flaps[i];
+      drawClockFlapFace(flap.face, flap, values[i]);
+      strncpy(flap.value, values[i], sizeof(flap.value) - 1);
+      flap.value[sizeof(flap.value) - 1] = '\0';
+      flap.face.pushSprite(&target, flap.x, flap.y);
+    }
+    s_clock_faces_initialized = true;
+    return;
+  }
+
+  size_t changed[kClockFlapCount];
+  size_t changed_count = 0;
+  for (size_t i = 0; i < kClockFlapCount; ++i) {
+    ClockFlap& flap = s_clock_flaps[i];
+    if (strcmp(flap.value, values[i]) == 0) continue;
+    drawClockFlapFace(flap.next, flap, values[i]);
+    changed[changed_count++] = i;
+  }
+
+  if (changed_count > 0) {
+    constexpr int kFlipFrames = 8;
+    constexpr int kFrameDelayMs = 8;
+    if (&target != static_cast<lgfx::LovyanGFX*>(&tft)) s_frame.pushSprite(0, 0);
+    for (int frame = 1; frame <= kFlipFrames; ++frame) {
+      const float progress = static_cast<float>(frame) / kFlipFrames;
+      for (size_t i = 0; i < kClockFlapCount; ++i) {
+        ClockFlap& flap = s_clock_flaps[i];
+        bool is_flipping = false;
+        for (size_t n = 0; n < changed_count; ++n) {
+          if (changed[n] == i) {
+            is_flipping = true;
+            break;
+          }
+        }
+        if (is_flipping) {
+          composeClockFlapFrame(flap, progress);
+          flap.frame.pushSprite(&target, flap.x, flap.y);
+        } else {
+          flap.face.pushSprite(&target, flap.x, flap.y);
+        }
+      }
+      if (&target != static_cast<lgfx::LovyanGFX*>(&tft)) {
+        for (size_t n = 0; n < changed_count; ++n) {
+          ClockFlap& flap = s_clock_flaps[changed[n]];
+          flap.frame.pushSprite(flap.x, flap.y);
+        }
+      }
+      delay(kFrameDelayMs);
+    }
+    for (size_t n = 0; n < changed_count; ++n) {
+      ClockFlap& flap = s_clock_flaps[changed[n]];
+      drawClockFlapFace(flap.face, flap, values[changed[n]]);
+      strncpy(flap.value, values[changed[n]], sizeof(flap.value) - 1);
+      flap.value[sizeof(flap.value) - 1] = '\0';
+    }
+  }
+
+  for (ClockFlap& flap : s_clock_flaps) {
+    flap.face.pushSprite(&target, flap.x, flap.y);
+  }
 }
 
 template <typename Gfx>
@@ -901,15 +1066,18 @@ void drawSplitFlapClock(Gfx& gfx, const struct tm& now) {
 
   char hours[3];
   char minutes[3];
+  char seconds[3];
   char day[3];
   const int hour = config::kClock24Hour
                        ? now.tm_hour
                        : (now.tm_hour % 12 == 0 ? 12 : now.tm_hour % 12);
   snprintf(hours, sizeof(hours), "%02d", hour);
   snprintf(minutes, sizeof(minutes), "%02d", now.tm_min);
+  snprintf(seconds, sizeof(seconds), "%02d", now.tm_sec);
   snprintf(day, sizeof(day), "%02d", now.tm_mday);
   char hour_tens[] = {hours[0], '\0'};
   char minute_tens[] = {minutes[0], '\0'};
+  char second_tens[] = {seconds[0], '\0'};
   char day_tens[] = {day[0], '\0'};
   static constexpr const char* months[] = {"JAN", "FEB", "MAR", "APR", "MAY", "JUN",
                                            "JUL", "AUG", "SEP", "OCT", "NOV", "DEC"};
@@ -922,16 +1090,17 @@ void drawSplitFlapClock(Gfx& gfx, const struct tm& now) {
                  cx, 45);
   gfx.setTextDatum(textdatum_t::top_left);
 
-  drawFlapTile(gfx, 27, 66, 40, 60, hour_tens, true);
-  drawFlapTile(gfx, 71, 66, 40, 60, hours + 1, true);
-  drawFlapTile(gfx, 129, 66, 40, 60, minute_tens, true);
-  drawFlapTile(gfx, 173, 66, 40, 60, minutes + 1, true);
-  gfx.fillCircle(cx, 86, 3, clockRgb(242, 236, 222));
-  gfx.fillCircle(cx, 106, 3, clockRgb(242, 236, 222));
-
-  drawFlapTile(gfx, 57, 138, 26, 36, day_tens, false);
-  drawFlapTile(gfx, 87, 138, 26, 36, day + 1, false);
-  drawFlapTile(gfx, 123, 138, 60, 36, month, false);
+  const char* values[kClockFlapCount] = {
+      hour_tens, hours + 1, minute_tens, minutes + 1,
+      second_tens, seconds + 1, day_tens, day + 1, month,
+  };
+  if (initializeClockFlaps()) {
+    updateClockFlaps(gfx, values);
+  }
+  gfx.fillCircle(84, 91, 3, clockRgb(242, 236, 222));
+  gfx.fillCircle(84, 109, 3, clockRgb(242, 236, 222));
+  gfx.fillCircle(157, 91, 3, clockRgb(242, 236, 222));
+  gfx.fillCircle(157, 109, 3, clockRgb(242, 236, 222));
 
   applyCardinalStyle();
   gfx.setTextDatum(textdatum_t::middle_center);
