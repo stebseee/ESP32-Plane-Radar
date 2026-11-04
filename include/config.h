@@ -26,8 +26,11 @@ constexpr unsigned long kWifiReconnectIntervalMs = 15000;
 
 // --- BOOT button (ESP32-C3 Super Mini, active LOW) ---
 constexpr gpio_num_t kBootPin = GPIO_NUM_9;
-constexpr unsigned long kBootResetHoldMs = 3000UL;
-/** BOOT hold duration to toggle the radar sweep (release before reset hold). */
+/** Release after this hold to reset saved Wi-Fi/location settings. */
+constexpr unsigned long kBootSettingsResetHoldMs = 3000UL;
+/** Hold BOOT this long to restart directly into the ROM flashing mode. */
+constexpr unsigned long kBootFlashModeHoldMs = 10000UL;
+/** BOOT hold duration to toggle the radar sweep (release before settings reset). */
 constexpr unsigned long kBootSweepToggleMinMs = 800UL;
 /** Ignore BOOT taps shorter than this (debounce). */
 constexpr unsigned long kBootTapMinMs = 40UL;
@@ -94,6 +97,9 @@ constexpr bool kClock24Hour = true;
 /** Stay on the radar this long after the last aircraft leaves the ring, so a
  *  plane hovering at the edge doesn't flip the screen back and forth. */
 constexpr unsigned long kClockIdleDelayMs = 10000;
+/** Refresh current weather in the background; hide it when a fetch fails. */
+constexpr unsigned long kWeatherRefreshIntervalMs = 30UL * 60UL * 1000UL;
+constexpr unsigned long kWeatherRetryIntervalMs = 5UL * 60UL * 1000UL;
 
 // --- UI colors (RGB565) — status screens ---
 constexpr uint16_t kColorBlack = 0x0000;

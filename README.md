@@ -19,9 +19,10 @@ After Wi‑Fi is saved, the device reconnects automatically; the radar runs in t
 |--------|--------|
 | **Short tap** (< 0.8 s) | Cycle range preset (5 → 10 → 15 → 25 km); saved to flash |
 | **Hold 0.8–3 s, then release** | Toggle radar sweep animation; saved across reboots |
-| **Hold 3 s** | Clear Wi‑Fi, location, and units; reboot into setup portal |
+| **Hold 3–10 s, then release** | Clear Wi-Fi, location, and units; reboot into setup portal |
+| **Hold 10 s** | Restart into the ESP32-C3 ROM flashing mode without clearing saved settings |
 
-During setup you can also hold BOOT at power-on to force a credential reset (same as the long press).
+At power-on, holding BOOT also selects the ROM flashing mode. After entering it, release BOOT before flashing.
 
 ## Wi‑Fi setup portal
 
@@ -92,6 +93,8 @@ As range decreases (or aircraft approach), targets move inward; beyond-ring dots
 ### Idle clock
 
 - When no aircraft are inside the ring for `kClockIdleDelayMs` (10 s), the screen shows a digital clock with the date; beyond-ring rim dots still appear
+- Current temperature in °C and a small weather-condition icon appear beneath the clock when weather data is available for the configured radar location
+- Weather refreshes in the background every 30 minutes; failed or invalid responses hide the weather line. Data comes from [Open-Meteo](https://open-meteo.com/en/docs), which offers a free API for non-commercial use without an API key.
 - Switches straight back to the radar as soon as an aircraft enters the ring
 - Time comes from NTP once Wi-Fi is up; time zone is `kClockTimeZone` (UK by default), 12/24-hour via `kClock24Hour` — both in `config.h`
 
@@ -114,7 +117,7 @@ Edit **`include/config.h`** for hardware and behavior:
 |------|----------------|
 | Portal | `kPortalApName`, `kPortalIp`, `kPortalHostname` / `kPortalHostUrl` (mDNS; needs `-DWM_MDNS` in `platformio.ini`) |
 | Wi‑Fi timing | connect attempts, reconnect grace, portal timeout (`0` = no timeout) |
-| BOOT | `kBootPin`, `kBootResetHoldMs`, `kBootTapMinMs` |
+| BOOT | `kBootPin`, `kBootSettingsResetHoldMs`, `kBootFlashModeHoldMs`, `kBootTapMinMs` |
 | Display SPI | pins, `kDisplayInvert`, `kDisplayRgbOrder`, `kDisplaySpiWriteHz` |
 | Default location | `kDefaultRadarLat`, `kDefaultRadarLon` (until portal overrides) |
 | ADS-B | `kAdsbFetchIntervalMs`, `kAdsbShowGroundAircraft` |
@@ -201,7 +204,7 @@ pio run -e supermini
 pio run -t merge -e supermini
 ```
 
-Put the board in download mode (hold **BOOT**, tap **RESET**), then flash with Chrome/Edge over USB.
+Enter download mode by holding **BOOT** for 10 seconds while firmware is running, or hold **BOOT** while reconnecting USB/power. Release **BOOT** when the board appears in Chrome/Edge's serial-port picker, then flash over USB.
 
 ### CI and releases (GitHub Actions)
 

@@ -10,6 +10,7 @@
 #include "services/adsb_client.h"
 #include "services/radar_location.h"
 #include "services/route_lookup.h"
+#include "services/weather.h"
 #include "services/wifi_setup.h"
 #include "ui/radar_display.h"
 #include "ui/radar_range.h"
@@ -76,6 +77,30 @@ void adsbFetchTask(void*) {
   }
 }
 
+// Weather is refreshed independently of the ADS-B path and published as an
+// optional snapshot. A failed request simply clears the weather line; it does
+// not delay or replace flight updates or clock rendering.
+void weatherFetchTask(void*) {
+  unsigned long last_fetch_ms = 0;
+  unsigned long refresh_interval_ms = config::kWeatherRefreshIntervalMs;
+  for (;;) {
+    const unsigned long now = millis();
+    if (WiFi.status() == WL_CONNECTED &&
+        (last_fetch_ms == 0 ||
+         now - last_fetch_ms >= refresh_interval_ms)) {
+      last_fetch_ms = now;
+      const bool success = services::weather::fetchCurrent(
+          services::location::lat(), services::location::lon());
+      refresh_interval_ms = success ? config::kWeatherRefreshIntervalMs
+                                    : config::kWeatherRetryIntervalMs;
+    } else if (WiFi.status() != WL_CONNECTED) {
+      services::weather::clear();
+      last_fetch_ms = 0;
+    }
+    vTaskDelay(pdMS_TO_TICKS(5000));
+  }
+}
+
 }  // namespace
 
 void setup() {
@@ -106,6 +131,8 @@ void setup() {
   // Start the background ADS-B fetch (pinned to core 0, away from the render
   // loop on core 1). It checks Wi-Fi state each cycle.
   xTaskCreatePinnedToCore(adsbFetchTask, "adsb", 16384, nullptr, 1, nullptr, 0);
+  xTaskCreatePinnedToCore(weatherFetchTask, "weather", 12288, nullptr, 0,
+                          nullptr, 0);
 }
 
 void loop() {

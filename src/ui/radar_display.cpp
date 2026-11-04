@@ -14,6 +14,7 @@
 #include "hardware/display_font.h"
 #include "services/adsb_client.h"
 #include "services/radar_location.h"
+#include "services/weather.h"
 #include "ui/radar_range.h"
 #include "ui/radar_theme.h"
 #include "ui/runway_overlay.h"
@@ -85,6 +86,10 @@ constexpr size_t kClockFlapCount = sizeof(s_clock_flaps) / sizeof(s_clock_flaps[
 bool s_clock_flaps_ready = false;
 bool s_clock_faces_initialized = false;
 bool s_clock_face_active = false;
+bool s_weather_state_initialized = false;
+bool s_weather_display_available = false;
+int s_weather_display_temp = 1000;
+int s_weather_display_kind = -1;
 
 class DrawScope {
  public:
@@ -1036,6 +1041,127 @@ void updateClockFlaps(lgfx::LovyanGFX& target,
 
 }
 
+enum class WeatherIconKind : int {
+  kSunny,
+  kPartlyCloudy,
+  kCloudy,
+  kFog,
+  kRain,
+  kSnow,
+  kThunder,
+};
+
+WeatherIconKind weatherIconKind(int code) {
+  if (code == 0) return WeatherIconKind::kSunny;
+  if (code == 1 || code == 2) return WeatherIconKind::kPartlyCloudy;
+  if (code == 3) return WeatherIconKind::kCloudy;
+  if (code == 45 || code == 48) return WeatherIconKind::kFog;
+  if ((code >= 51 && code <= 69) || (code >= 80 && code <= 82)) {
+    return WeatherIconKind::kRain;
+  }
+  if ((code >= 71 && code <= 77) || (code >= 85 && code <= 86)) {
+    return WeatherIconKind::kSnow;
+  }
+  if (code >= 95 && code <= 99) return WeatherIconKind::kThunder;
+  return WeatherIconKind::kCloudy;
+}
+
+void drawClockSun(lgfx::LovyanGFX& gfx, int cx, int cy, uint16_t color) {
+  gfx.fillCircle(cx, cy, 5, color);
+  for (int angle = 0; angle < 360; angle += 45) {
+    constexpr float kPi = 3.14159265f;
+    const float radians = angle * kPi / 180.0f;
+    const int x1 = cx + static_cast<int>(std::lround(8 * std::cos(radians)));
+    const int y1 = cy + static_cast<int>(std::lround(8 * std::sin(radians)));
+    const int x2 = cx + static_cast<int>(std::lround(11 * std::cos(radians)));
+    const int y2 = cy + static_cast<int>(std::lround(11 * std::sin(radians)));
+    gfx.drawLine(x1, y1, x2, y2, color);
+  }
+}
+
+void drawClockCloud(lgfx::LovyanGFX& gfx, int cx, int cy, uint16_t color) {
+  gfx.fillCircle(cx - 6, cy, 5, color);
+  gfx.fillCircle(cx, cy - 4, 7, color);
+  gfx.fillCircle(cx + 7, cy, 5, color);
+  gfx.fillRoundRect(cx - 10, cy - 1, 21, 7, 3, color);
+}
+
+void drawWeatherIcon(lgfx::LovyanGFX& gfx, int cx, int cy,
+                     WeatherIconKind kind) {
+  const uint16_t sun = clockRgb(255, 199, 61);
+  const uint16_t cloud = clockRgb(193, 207, 218);
+  const uint16_t rain = clockRgb(91, 173, 255);
+  const uint16_t snow = clockRgb(135, 218, 255);
+  const uint16_t bolt = clockRgb(255, 216, 74);
+
+  if (kind == WeatherIconKind::kSunny) {
+    drawClockSun(gfx, cx, cy, sun);
+    return;
+  }
+  if (kind == WeatherIconKind::kPartlyCloudy) {
+    drawClockSun(gfx, cx - 3, cy - 3, sun);
+    drawClockCloud(gfx, cx + 3, cy + 3, cloud);
+    return;
+  }
+
+  drawClockCloud(gfx, cx, cy, cloud);
+  if (kind == WeatherIconKind::kFog) {
+    gfx.drawLine(cx - 10, cy + 9, cx + 10, cy + 9, cloud);
+    gfx.drawLine(cx - 7, cy + 12, cx + 7, cy + 12, cloud);
+  } else if (kind == WeatherIconKind::kRain) {
+    gfx.drawLine(cx - 5, cy + 7, cx - 7, cy + 11, rain);
+    gfx.drawLine(cx + 2, cy + 7, cx, cy + 11, rain);
+    gfx.drawLine(cx + 8, cy + 7, cx + 6, cy + 11, rain);
+  } else if (kind == WeatherIconKind::kSnow) {
+    for (int x : {-6, 2, 9}) {
+      gfx.drawLine(cx + x, cy + 7, cx + x, cy + 11, snow);
+      gfx.drawLine(cx + x - 2, cy + 9, cx + x + 2, cy + 9, snow);
+    }
+  } else {
+    gfx.fillTriangle(cx - 1, cy + 6, cx + 4, cy + 6, cx, cy + 12, bolt);
+    gfx.fillTriangle(cx + 1, cy + 10, cx + 6, cy + 10, cx + 2, cy + 15, bolt);
+  }
+}
+
+void drawClockWeather(lgfx::LovyanGFX& gfx, bool entering_clock) {
+  services::weather::CurrentWeather weather;
+  const bool available = services::weather::current(&weather);
+  const int temp =
+      available ? static_cast<int>(std::lround(weather.temperature_c)) : 1000;
+  const int kind = available
+                       ? static_cast<int>(weatherIconKind(weather.weather_code))
+                       : -1;
+  const bool changed = entering_clock || !s_weather_state_initialized ||
+                       available != s_weather_display_available ||
+                       (available && (temp != s_weather_display_temp ||
+                                      kind != s_weather_display_kind));
+  if (!changed) return;
+
+  const uint16_t bg = clockRgb(0, 0, 0);
+  gfx.fillRect(70, 190, 100, 35, bg);
+  s_weather_state_initialized = true;
+  s_weather_display_available = available;
+  if (!available) {
+    s_weather_display_temp = 1000;
+    s_weather_display_kind = -1;
+    return;
+  }
+
+  const uint16_t text = clockRgb(242, 236, 222);
+  drawWeatherIcon(gfx, 87, 207, static_cast<WeatherIconKind>(kind));
+  char temperature[8];
+  snprintf(temperature, sizeof(temperature), "%d", temp);
+  gfx.setTextDatum(textdatum_t::middle_center);
+  gfx.setTextColor(text);
+  displayFontSetBitmap(gfx, &fonts::FreeSansBold12pt7b);
+  gfx.drawString(temperature, 137, 208);
+  const int number_right = 137 + gfx.textWidth(temperature) / 2;
+  gfx.drawCircle(number_right + 4, 201, 2, text);
+  gfx.drawString("C", number_right + 14, 208);
+  s_weather_display_temp = temp;
+  s_weather_display_kind = kind;
+}
+
 void drawSplitFlapClock(lgfx::LovyanGFX& gfx, const struct tm& now) {
   constexpr int cx = radar::kCenterX;
   const uint16_t bg = clockRgb(0, 0, 0);
@@ -1078,6 +1204,7 @@ void drawSplitFlapClock(lgfx::LovyanGFX& gfx, const struct tm& now) {
     gfx.fillCircle(157, 91, 3, clockRgb(242, 236, 222));
     gfx.fillCircle(157, 109, 3, clockRgb(242, 236, 222));
   }
+  drawClockWeather(gfx, entering_clock);
   s_clock_face_active = true;
 }
 

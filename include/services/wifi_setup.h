@@ -16,5 +16,5 @@ void bootButtonInit();
 bool bootButtonConsumeTap();
 /** Latched medium hold; toggles the radar sweep when released. */
 bool bootButtonConsumeSweepToggle();
-/** Call each loop iteration; triggers WiFi reset on long hold. */
+/** Call each loop iteration; handles settings reset and ROM-flash BOOT holds. */
 void bootButtonPollLongPress();

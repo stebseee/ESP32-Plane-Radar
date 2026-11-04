@@ -22,6 +22,8 @@
 portMUX_TYPE s_boot_mux = portMUX_INITIALIZER_UNLOCKED;
 volatile bool s_boot_tap_pending = false;
 volatile bool s_boot_sweep_toggle_pending = false;
+volatile bool s_boot_settings_reset_pending = false;
+volatile bool s_boot_flash_mode_pending = false;
 volatile bool s_boot_is_down = false;
 volatile unsigned long s_boot_down_ms = 0;
 bool s_long_press_handled = false;
@@ -40,8 +42,12 @@ void IRAM_ATTR onBootButtonIsr() {
         held < config::kBootSweepToggleMinMs) {
       s_boot_tap_pending = true;
     } else if (held >= config::kBootSweepToggleMinMs &&
-               held < config::kBootResetHoldMs) {
+               held < config::kBootSettingsResetHoldMs) {
       s_boot_sweep_toggle_pending = true;
+    } else if (held < config::kBootFlashModeHoldMs) {
+      s_boot_settings_reset_pending = true;
+    } else {
+      s_boot_flash_mode_pending = true;
     }
     s_boot_is_down = false;
   }
@@ -426,16 +432,36 @@ void bootButtonPollLongPress() {
     portEXIT_CRITICAL(&s_boot_mux);
 
     if (!s_long_press_handled &&
-        millis() - down_ms >= config::kBootResetHoldMs) {
+        millis() - down_ms >= config::kBootFlashModeHoldMs) {
       s_long_press_handled = true;
-      Serial.println("BOOT held — resetting WiFi");
-      wifiResetCredentialsAndReboot();
+      Serial.println("BOOT held — restarting into ROM flashing mode");
+      esp_restart();
     }
   } else {
+    bool reset_settings = false;
+    bool enter_flash_mode = false;
     portENTER_CRITICAL(&s_boot_mux);
     s_boot_is_down = false;
+    reset_settings = s_boot_settings_reset_pending;
+    enter_flash_mode = s_boot_flash_mode_pending;
+    s_boot_settings_reset_pending = false;
+    s_boot_flash_mode_pending = false;
     portEXIT_CRITICAL(&s_boot_mux);
     s_long_press_handled = false;
+
+    if (enter_flash_mode) {
+      // The release edge can race with the 10-second poll. Reassert the BOOT
+      // strap briefly so the software SoC reset sees it low in either case.
+      pinMode(static_cast<uint8_t>(config::kBootPin), OUTPUT);
+      digitalWrite(static_cast<uint8_t>(config::kBootPin), LOW);
+      Serial.println("BOOT long hold — entering ROM flashing mode");
+      delay(30);
+      esp_restart();
+    }
+    if (reset_settings) {
+      Serial.println("BOOT held 3-10 seconds — resetting saved settings");
+      wifiResetCredentialsAndReboot();
+    }
   }
 }
 

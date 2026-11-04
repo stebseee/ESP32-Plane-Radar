@@ -224,8 +224,8 @@ void statusScreenConnectFailed() {
       {"Could not connect", 1.15f, &kGfxTitle},
       {"Check Wi-Fi password", 1.0f, &kGfxBody},
       {"and signal strength.", 1.0f, &kGfxBody},
-      {"Hold BOOT 3 sec", 1.0f, &kGfxBody},
-      {"to reset Wi-Fi", 1.0f, &kGfxBody},
+      {"Hold BOOT 3-10 sec", 1.0f, &kGfxBody},
+      {"release to reset settings", 0.9f, &kGfxBody},
   };
   drawTextBlock(config::kColorYellow, config::kTextOnYellow, lines,
                 sizeof(lines) / sizeof(lines[0]));
