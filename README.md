@@ -94,7 +94,7 @@ As range decreases (or aircraft approach), targets move inward; beyond-ring dots
 
 - When no aircraft are inside the ring for `kClockIdleDelayMs` (10 s), the screen shows a digital clock with the date; beyond-ring rim dots still appear
 - Current temperature in °C and a small weather-condition icon appear beneath the clock when weather data is available for the configured radar location
-- Weather refreshes in the background every 30 minutes; failed or invalid responses hide the weather line. Data comes from [Open-Meteo](https://open-meteo.com/en/docs), which offers a free API for non-commercial use without an API key.
+- Weather refreshes in the background every 30 minutes; failed or invalid responses hide the weather line and print a `weather:` diagnostic to the serial log. Data comes from [Open-Meteo](https://open-meteo.com/en/docs), which offers a free API for non-commercial use without an API key.
 - Switches straight back to the radar as soon as an aircraft enters the ring
 - Time comes from NTP once Wi-Fi is up; time zone is `kClockTimeZone` (UK by default), 12/24-hour via `kClock24Hour` — both in `config.h`
 

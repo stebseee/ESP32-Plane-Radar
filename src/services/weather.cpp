@@ -1,5 +1,6 @@
 #include "services/weather.h"
 
+#include <Arduino.h>
 #include <ArduinoJson.h>
 #include <HTTPClient.h>
 #include <WiFi.h>
@@ -14,8 +15,8 @@ namespace services::weather {
 
 namespace {
 
-constexpr int kConnectTimeoutMs = 3500;
-constexpr int kRequestTimeoutMs = 3500;
+constexpr int kConnectTimeoutMs = 8000;
+constexpr int kRequestTimeoutMs = 8000;
 portMUX_TYPE s_weather_mux = portMUX_INITIALIZER_UNLOCKED;
 CurrentWeather s_current;
 
@@ -31,6 +32,7 @@ void publishUnavailable() {
 bool fetchCurrent(double latitude, double longitude) {
   if (WiFi.status() != WL_CONNECTED || latitude < -90.0 || latitude > 90.0 ||
       longitude < -180.0 || longitude > 180.0) {
+    Serial.println("weather: skipped (Wi-Fi unavailable or invalid coordinates)");
     publishUnavailable();
     return false;
   }
@@ -45,6 +47,7 @@ bool fetchCurrent(double latitude, double longitude) {
   client.setInsecure();
   HTTPClient http;
   if (!http.begin(client, url)) {
+    Serial.println("weather: failed to start HTTP request");
     publishUnavailable();
     return false;
   }
@@ -52,6 +55,7 @@ bool fetchCurrent(double latitude, double longitude) {
   http.setTimeout(kRequestTimeoutMs);
   const int status = http.GET();
   if (status != HTTP_CODE_OK) {
+    Serial.printf("weather: HTTP request failed (%d)\n", status);
     http.end();
     publishUnavailable();
     return false;
@@ -67,6 +71,7 @@ bool fetchCurrent(double latitude, double longitude) {
       doc, body.c_str(), DeserializationOption::Filter(filter));
   http.end();
   if (error) {
+    Serial.printf("weather: invalid JSON response (%s)\n", error.c_str());
     publishUnavailable();
     return false;
   }
@@ -76,6 +81,7 @@ bool fetchCurrent(double latitude, double longitude) {
   if ((!temp_value.is<float>() && !temp_value.is<double>() &&
        !temp_value.is<int>()) ||
       !code_value.is<int>()) {
+    Serial.println("weather: response missing current temperature or condition");
     publishUnavailable();
     return false;
   }
@@ -83,6 +89,7 @@ bool fetchCurrent(double latitude, double longitude) {
   const float temperature_c = temp_value.as<float>();
   const int weather_code = code_value.as<int>();
   if (!std::isfinite(temperature_c) || weather_code < 0 || weather_code > 99) {
+    Serial.println("weather: response contains invalid current conditions");
     publishUnavailable();
     return false;
   }
@@ -92,6 +99,7 @@ bool fetchCurrent(double latitude, double longitude) {
   s_current.temperature_c = temperature_c;
   s_current.weather_code = weather_code;
   portEXIT_CRITICAL(&s_weather_mux);
+  Serial.printf("weather: %.1f C, WMO code %d\n", temperature_c, weather_code);
   return true;
 }
 
