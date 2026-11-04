@@ -62,42 +62,38 @@ void handleBootButton() {
 // 4 Hz throughout. The task publishes into the shared aircraft buffer under a
 // lock; the render loop reads a snapshot.
 void adsbFetchTask(void*) {
+  unsigned long last_weather_fetch_ms = 0;
+  unsigned long weather_refresh_interval_ms = config::kWeatherRefreshIntervalMs;
+  bool was_wifi_connected = false;
   for (;;) {
     if (WiFi.status() == WL_CONNECTED) {
+      was_wifi_connected = true;
       services::adsb::fetchUpdate(services::location::lat(),
                                   services::location::lon(),
                                   ui::radar::fetchRadiusKm());
+      // Keep TLS requests serialized on the ESP32-C3. A second HTTPS task
+      // reserves substantial stack and can exhaust heap during ADS-B TLS.
+      const unsigned long now = millis();
+      if (last_weather_fetch_ms == 0 ||
+          now - last_weather_fetch_ms >= weather_refresh_interval_ms) {
+        last_weather_fetch_ms = now;
+        const bool success = services::weather::fetchCurrent(
+            services::location::lat(), services::location::lon());
+        weather_refresh_interval_ms = success
+                                          ? config::kWeatherRefreshIntervalMs
+                                          : config::kWeatherRetryIntervalMs;
+      }
       // New callsigns get their route on this pass and show it from the next
       // fetch on; cached ones are filled in by fetchUpdate() directly.
       if (config::kShowRoutes) {
         services::route::resolvePending(config::kRouteLookupsPerCycle);
       }
+    } else if (was_wifi_connected) {
+      services::weather::clear();
+      last_weather_fetch_ms = 0;
+      was_wifi_connected = false;
     }
     vTaskDelay(pdMS_TO_TICKS(config::kAdsbFetchIntervalMs));
-  }
-}
-
-// Weather is refreshed independently of the ADS-B path and published as an
-// optional snapshot. A failed request simply clears the weather line; it does
-// not delay or replace flight updates or clock rendering.
-void weatherFetchTask(void*) {
-  unsigned long last_fetch_ms = 0;
-  unsigned long refresh_interval_ms = config::kWeatherRefreshIntervalMs;
-  for (;;) {
-    const unsigned long now = millis();
-    if (WiFi.status() == WL_CONNECTED &&
-        (last_fetch_ms == 0 ||
-         now - last_fetch_ms >= refresh_interval_ms)) {
-      last_fetch_ms = now;
-      const bool success = services::weather::fetchCurrent(
-          services::location::lat(), services::location::lon());
-      refresh_interval_ms = success ? config::kWeatherRefreshIntervalMs
-                                    : config::kWeatherRetryIntervalMs;
-    } else if (WiFi.status() != WL_CONNECTED) {
-      services::weather::clear();
-      last_fetch_ms = 0;
-    }
-    vTaskDelay(pdMS_TO_TICKS(5000));
   }
 }
 
@@ -129,10 +125,9 @@ void setup() {
   }
 
   // Start the background ADS-B fetch (pinned to core 0, away from the render
-  // loop on core 1). It checks Wi-Fi state each cycle.
+  // loop on core 1). ADS-B, weather, and route HTTPS requests are serialized
+  // in this task to limit TLS heap and stack use.
   xTaskCreatePinnedToCore(adsbFetchTask, "adsb", 16384, nullptr, 1, nullptr, 0);
-  xTaskCreatePinnedToCore(weatherFetchTask, "weather", 12288, nullptr, 0,
-                          nullptr, 0);
 }
 
 void loop() {
